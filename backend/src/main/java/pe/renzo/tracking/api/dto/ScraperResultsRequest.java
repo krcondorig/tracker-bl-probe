@@ -42,6 +42,20 @@ public record ScraperResultsRequest(
     ) {
     }
 
+    /**
+     * Datos normalizados de un contenedor.
+     *
+     * <p>`currentStatus` y `location` son el <em>último</em> evento. Tras la
+     * descarga ese último evento suele ser un movimiento terrestre (Maersk
+     * reporta {@code "CX"} en MEXICO CITY), así que no sirven para responder si
+     * el buque llegó al puerto: para eso están {@code arrived},
+     * {@code arrivalDate} y {@code dischargePort}.
+     *
+     * <p>`eta` es la llegada estimada <em>al puerto</em>. La entrega final al
+     * consignatario va en `finalDeliveryEta` porque puede ser semanas posterior
+     * (entregar en MEXICO CITY tras descargar en Manzanillo) y confundirlas
+     * hacía que se reportara como ETA una fecha que ya había pasado.
+     */
     public record TrackingData(
             String currentStatus,
             String location,
@@ -49,10 +63,15 @@ public record ScraperResultsRequest(
             String voyage,
             Instant eta,
             Instant lastUpdate,
+            Boolean arrived,
+            Instant arrivalDate,
+            String dischargePort,
+            Instant finalDeliveryEta,
             List<TrackingEventDto> events
     ) {
         public TrackingData {
             events = (events == null) ? List.of() : List.copyOf(events);
+            arrived = Boolean.TRUE.equals(arrived);
         }
     }
 

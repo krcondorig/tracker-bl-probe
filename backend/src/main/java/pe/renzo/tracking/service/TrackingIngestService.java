@@ -105,6 +105,22 @@ public class TrackingIngestService {
         String vessel = hasFreshData ? result.data().vessel() : base.vessel();
         String voyage = hasFreshData ? result.data().voyage() : base.voyage();
         Instant eta = hasFreshData ? result.data().eta() : base.eta();
+
+        // La llegada es un hecho pasado e irreversible: cuando el buque atracó,
+        // ya no puede "desatracar". Por eso, a diferencia del resto de campos, se
+        // conserva aunque la consulta de hoy falle o aunque el evento de arribo ya
+        // no venga en el payload (las navieras solo devuelven una ventana reciente).
+        // Sin esto, `arrived` volvía a false en la siguiente ejecución y el
+        // backend volvía a decir "en tránsito" para un barco que ya estaba aquí.
+        boolean freshArrived = hasFreshData && result.data().arrived();
+        boolean arrived = base.arrived() || freshArrived;
+        Instant arrivalAt = firstNonNull(
+                hasFreshData ? result.data().arrivalDate() : null, base.arrivalAt());
+        String dischargePort = firstNonBlank(
+                hasFreshData ? result.data().dischargePort() : null, base.dischargePort());
+        Instant finalDeliveryEta = firstNonNull(
+                hasFreshData ? result.data().finalDeliveryEta() : null, base.finalDeliveryEta());
+
         Instant lastEventAt = hasFreshData ? lastEventTimestamp(result) : base.lastEventAt();
         String sourceUrl = hasFreshData ? result.sourceUrl() : base.sourceUrl();
 
@@ -124,6 +140,10 @@ public class TrackingIngestService {
                 vessel,
                 voyage,
                 eta,
+                arrived,
+                arrivalAt,
+                dischargePort,
+                finalDeliveryEta,
                 lastEventAt,
                 events,
                 attempts,
@@ -156,6 +176,16 @@ public class TrackingIngestService {
         long multiplier = 1L << Math.min(Math.max(attempts - 1, 0), 5);
         Duration candidate = BASE_BACKOFF.multipliedBy(multiplier);
         return candidate.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : candidate;
+    }
+
+    /** Conserva el valor ya conocido cuando el payload nuevo no lo trae. */
+    private static Instant firstNonNull(Instant candidate, Instant fallback) {
+        return candidate != null ? candidate : fallback;
+    }
+
+    /** Igual que {@link #firstNonNull} para textos: un campo vacío no borra el previo. */
+    private static String firstNonBlank(String candidate, String fallback) {
+        return isBlank(candidate) ? fallback : candidate;
     }
 
     private static String normalise(String value) {

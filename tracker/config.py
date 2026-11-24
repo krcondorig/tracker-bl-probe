@@ -82,6 +82,38 @@ def _parse_carriers(raw: str) -> tuple[Carrier, ...]:
     return tuple(selected) or (Carrier.MSC, Carrier.MAERSK, Carrier.HAPAG_LLOYD)
 
 
+def _parse_proxy_carriers(raw: str) -> tuple[Carrier, ...]:
+    """Navieras que salen por el proxy. Vacío = ninguna (todas directas).
+
+    Es una lista de conveniencia, no un contrato: a diferencia de `--carriers`,
+    un nombre desconocido no puede tumbar la corrida, solo deja esa naviera sin
+    proxy. Se aceptan los mismos alias.
+    """
+    aliases = {
+        "MSC": Carrier.MSC,
+        "MAERSK": Carrier.MAERSK,
+        "MSK": Carrier.MAERSK,
+        "HAPAG": Carrier.HAPAG_LLOYD,
+        "HAPAGLLOYD": Carrier.HAPAG_LLOYD,
+        "HAPAG_LLOYD": Carrier.HAPAG_LLOYD,
+        "HAPAG-LLOYD": Carrier.HAPAG_LLOYD,
+        "HL": Carrier.HAPAG_LLOYD,
+        "ALL": Carrier.UNKNOWN,
+    }
+    if not (raw or "").strip():
+        return ()
+    selected: list[Carrier] = []
+    for chunk in raw.replace(";", ",").split(","):
+        carrier = aliases.get(chunk.strip().upper())
+        if carrier is None:
+            continue
+        if carrier is Carrier.UNKNOWN:
+            return (Carrier.MSC, Carrier.MAERSK, Carrier.HAPAG_LLOYD)
+        if carrier not in selected:
+            selected.append(carrier)
+    return tuple(selected)
+
+
 @dataclass(frozen=True)
 class Settings:
     # Spring Boot
@@ -92,6 +124,14 @@ class Settings:
 
     # Navegador
     proxy_url: str
+    # Navieras que salen por el proxy. El proxy se fija al lanzar el navegador y
+    # no se puede cambiar por pestaña, así que se elige a quién aplicarlo:
+    # Hapag bloquea por reputación de IP y necesita WARP; MSC y Maersk responden
+    # bien desde la IP del runner y meterlos por WARP los degrada.
+    proxy_carriers: tuple[Carrier, ...]
+    # Puerto de descarga que interesa para responder "¿ya llegó?". Se compara
+    # contra el Location de los eventos. None desactiva la comprobación.
+    discharge_port: str | None
     headless: bool
     locale: str
     humanize: bool
@@ -116,6 +156,17 @@ class Settings:
         if self.spring_api_token:
             return {"Authorization": f"Bearer {self.spring_api_token}"}
         return {}
+
+    def proxy_for(self, carrier: Carrier) -> str | None:
+        """Proxy a usar para esta naviera, o None para salir directo.
+
+        Devuelve None si no hay proxy configurado (`SCRAPER_PROXY=""`, que es
+        como el workflow desactiva WARP para depurar) o si la naviera no está
+        en `SCRAPER_PROXY_CARRIERS`.
+        """
+        if not self.proxy_url:
+            return None
+        return self.proxy_url if carrier in self.proxy_carriers else None
 
     def validate_for_spring(self) -> None:
         if not self.spring_base_url:
@@ -155,6 +206,10 @@ def load_settings(argv: Sequence[str] | None = None) -> Settings:
         http_timeout_seconds=_env_float("SCRAPER_HTTP_TIMEOUT", 30.0),
         http_retries=_env_int("SCRAPER_HTTP_RETRIES", 3),
         proxy_url=_env("SCRAPER_PROXY", "socks5://127.0.0.1:40000"),
+        proxy_carriers=_parse_proxy_carriers(
+            _env("SCRAPER_PROXY_CARRIERS", "HAPAG_LLOYD")
+        ),
+        discharge_port=(_env("SCRAPER_PORT", "MANZANILLO").strip().upper() or None),
         headless=_env_bool("SCRAPER_HEADLESS", False),
         locale=_env("SCRAPER_LOCALE", "es-PE"),
         humanize=_env_bool("SCRAPER_HUMANIZE", True),

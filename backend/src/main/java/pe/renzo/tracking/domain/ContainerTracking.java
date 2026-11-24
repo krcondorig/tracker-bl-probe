@@ -21,6 +21,11 @@ public record ContainerTracking(
         String vessel,
         String voyage,
         Instant eta,
+        /** ¿El buque ya llegó al puerto de descarga? Es la pregunta del negocio. */
+        boolean arrived,
+        Instant arrivalAt,
+        String dischargePort,
+        Instant finalDeliveryEta,
         Instant lastEventAt,
         List<TrackingEvent> events,
         int attempts,
@@ -42,8 +47,9 @@ public record ContainerTracking(
     public static ContainerTracking pending(String containerNumber, String carrier, Instant now) {
         return new ContainerTracking(
                 containerNumber, carrier, TrackingStatus.PENDING,
-                null, null, null, null, null, null,
-                List.of(), 0, null, null, null, null, null, null, false,
+                null, null, null, null, null,
+                false, null, null, null,
+                null, List.of(), 0, null, null, null, null, null, null, false,
                 now, now);
     }
 

@@ -111,14 +111,61 @@ class ParsedContainer:
     check_digit_ok: bool
 
 
-def parse(raw: str) -> ParsedContainer:
+def _coerce_carrier(value: Carrier | str | None) -> Carrier | None:
+    """Acepta 'MSC', 'msc' o Carrier.MSC. Devuelve None si no es válido."""
+    if value is None:
+        return None
+    if isinstance(value, Carrier):
+        return None if value is Carrier.UNKNOWN else value
+    try:
+        resolved = Carrier(str(value).strip().upper())
+    except ValueError:
+        return None
+    return None if resolved is Carrier.UNKNOWN else resolved
+
+
+def parse(raw: str, carrier_hint: Carrier | str | None = None) -> ParsedContainer:
+    """Normaliza y clasifica.
+
+    `carrier_hint` es la naviera que se conoce por fuera del número (el B/L del
+    que salió, o el backend). Hace falta porque los prefijos de arrendador
+    (CAIU, DRYU, FCIU, TRHU...) son ambiguos: el mismo CAIU puede viajar en un
+    barco de MSC o de otra naviera, así que el prefijo no identifica nada.
+
+    El prefijo propio sigue mandando. Si el número ya dice MRKU=Maersk, una
+    pista equivocada no lo rompe; la pista solo rellena el hueco de UNKNOWN.
+    """
     number = normalize(raw)
+    by_prefix = resolve_carrier(number)
+    hinted = _coerce_carrier(carrier_hint)
     return ParsedContainer(
         number=number,
-        carrier=resolve_carrier(number),
+        carrier=by_prefix if by_prefix is not Carrier.UNKNOWN else (hinted or Carrier.UNKNOWN),
         well_formed=is_well_formed(number),
         check_digit_ok=check_digit_valid(number),
     )
+
+
+def carrier_candidates(
+    raw: str,
+    allowed: tuple[Carrier, ...],
+    carrier_hint: Carrier | str | None = None,
+) -> list[Carrier]:
+    """Navieras por las que merece la pena preguntar, en orden de preferencia.
+
+    Con prefijo conocido devuelve solo esa (no se gasta una consulta de más).
+    Con prefijo ambiguo y una pista devuelve la pista. Sin ninguna de las dos,
+    se prueban las navieras habilitadas: mejor una consulta de más que perder
+    el contenedor.
+    """
+    number = normalize(raw)
+    by_prefix = resolve_carrier(number)
+    if by_prefix is not Carrier.UNKNOWN:
+        return [by_prefix]
+    hinted = _coerce_carrier(carrier_hint)
+    if hinted is not None:
+        return [hinted]
+    return list(allowed)
 
 
 def split_csv(raw: str | None) -> list[str]:

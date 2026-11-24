@@ -19,6 +19,53 @@ class BackendError(RuntimeError):
     """El backend no está disponible o rechazó la petición tras los reintentos."""
 
 
+_NUMBER_KEYS = ("containerNumber", "container", "numero", "number", "code")
+
+
+def parse_pending_entries(entries: Any) -> list[tuple[str, str | None]]:
+    """Normaliza la lista de /pendientes a pares (numero, naviera_o_None).
+
+    Antes se devolvian solo los numeros y el carrier se volvia a adivinar por
+    el prefijo. Eso pierde informacion: con prefijos de arrendador (CAIU, DRYU,
+    FCIU...) el prefijo no identifica naviera y el contenedor se descartaba
+    como INVALID sin consultar. Si el backend manda una naviera usable, se
+    conserva; si manda UNKNOWN o nada, queda None y decide el prefijo.
+    """
+    if not isinstance(entries, list):
+        return []
+
+    out: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        number: str | None = None
+        carrier: str | None = None
+
+        if isinstance(entry, str):
+            number = entry
+        elif isinstance(entry, dict):
+            for key in _NUMBER_KEYS:
+                value = entry.get(key)
+                if isinstance(value, str) and value.strip():
+                    number = value
+                    break
+            raw_carrier = entry.get("carrier")
+            if isinstance(raw_carrier, str) and raw_carrier.strip():
+                carrier = raw_carrier.strip().upper()
+                if carrier in ("", "UNKNOWN", "NULL", "NONE"):
+                    carrier = None
+
+        if not number or not number.strip():
+            continue
+        # Se deduplica en mayusculas: el mismo contenedor con distinta
+        # capitalizacion no debe consultarse dos veces.
+        normalized = number.strip().upper()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append((normalized, carrier))
+    return out
+
+
 class SpringClient:
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -65,8 +112,8 @@ class SpringClient:
         raise BackendError(f"{method} {path} agotó los reintentos: {last_error}")
 
     # ---------------------------------------------------------------- lecturas
-    def fetch_pending(self, limit: int | None = None) -> list[str]:
-        """GET /pendientes -> lista de números de contenedor.
+    def fetch_pending(self, limit: int | None = None) -> list[tuple[str, str | None]]:
+        """GET /pendientes -> pares (número, naviera opcional).
 
         Acepta las tres formas razonables de respuesta para no acoplar el
         contrato a una sola implementación del backend:
@@ -99,18 +146,9 @@ class SpringClient:
         else:
             entries = []
 
-        numbers: list[str] = []
-        for entry in entries:
-            if isinstance(entry, str):
-                numbers.append(entry)
-            elif isinstance(entry, dict):
-                for key in ("containerNumber", "container", "numero", "number", "code"):
-                    value = entry.get(key)
-                    if isinstance(value, str) and value.strip():
-                        numbers.append(value)
-                        break
-        log.info("Backend devolvió %d contenedores pendientes", len(numbers))
-        return numbers
+        pending = parse_pending_entries(entries)
+        log.info("Backend devolvió %d contenedores pendientes", len(pending))
+        return pending
 
     # ---------------------------------------------------------------- escritura
     def post_results(self, payload: ResultsPayload) -> dict[str, Any]:

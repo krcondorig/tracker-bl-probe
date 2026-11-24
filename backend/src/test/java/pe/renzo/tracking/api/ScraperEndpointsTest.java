@@ -121,6 +121,64 @@ class ScraperEndpointsTest {
     }
 
     @Test
+    @DisplayName("El webhook expone si el buque ya llegó al puerto (payload real de Maersk)")
+    void webhookExposesArrival() throws Exception {
+        mockMvc.perform(post("/api/v1/tracking/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("[\"MRKU7779494\"]"))
+                .andExpect(status().isCreated());
+
+        // Forma exacta que envía tracker/models.py para el B/L 275792562.
+        String payload = """
+                {
+                  "runId": "arrival-1",
+                  "results": [
+                    {
+                      "containerNumber": "MRKU7779494",
+                      "carrier": "MAERSK",
+                      "status": "OK",
+                      "attempts": 1,
+                      "durationMs": 9000,
+                      "scrapedAt": "2026-10-27T07:19:00Z",
+                      "checkDigitValid": true,
+                      "data": {
+                        "currentStatus": "CX",
+                        "location": "MEXICO CITY",
+                        "vessel": "MAERSK EL ALTO",
+                        "voyage": "636E",
+                        "lastUpdate": "2026-10-27T07:19:00Z",
+                        "arrived": true,
+                        "arrivalDate": "2026-10-06T12:28:00Z",
+                        "dischargePort": "MANZANILLO",
+                        "finalDeliveryEta": "2026-10-31T13:57:00Z",
+                        "events": []
+                      }
+                    }
+                  ]
+                }
+                """;
+
+        mockMvc.perform(post("/api/v1/scraper/results")
+                        .header("Authorization", AUTH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(payload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updated").value(1));
+
+        mockMvc.perform(get("/api/v1/tracking/MRKU7779494"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.arrived").value(true))
+                .andExpect(jsonPath("$.arrivalDate").value("2026-10-06T12:28:00Z"))
+                .andExpect(jsonPath("$.dischargePort").value("MANZANILLO"))
+                .andExpect(jsonPath("$.finalDeliveryEta").value("2026-10-31T13:57:00Z"))
+                // No se inventa una ETA de puerto cuando ya llegó.
+                .andExpect(jsonPath("$.eta").doesNotExist())
+                // El último evento terrestre no se confunde con la llegada.
+                .andExpect(jsonPath("$.currentStatus").value("CX"))
+                .andExpect(jsonPath("$.location").value("MEXICO CITY"));
+    }
+
+    @Test
     @DisplayName("El webhook rechaza peticiones sin token")
     void webhookRequiresBearer() throws Exception {
         mockMvc.perform(post("/api/v1/scraper/results")

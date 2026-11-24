@@ -54,6 +54,22 @@ El script espera tres cosas y nada más:
 2. `POST {SPRING_WEBHOOK_URL}` con el JSON de resultados.
 3. `420`/`5xx` reintentables: el cliente reintenta con backoff exponencial.
 
+`data` incluye, además del último evento, la respuesta a la pregunta que
+importa: **¿el buque ya llegó al puerto?**
+
+| Campo | Significado |
+| --- | --- |
+| `currentStatus` / `location` | El **último** evento. Tras la descarga suele ser un movimiento terrestre (`CX` en MEXICO CITY), así que **no** responde si llegó. |
+| `arrived` | `true` si hay un evento de arribo o descarga **en `SCRAPER_PORT`**. |
+| `arrivalDate` | Fecha de ese arribo (la más temprana si hubo varias escalas). |
+| `dischargePort` | Puerto contra el que se comparó (`MANZANILLO`). |
+| `eta` | Llegada estimada al **puerto**. Se omite si `arrived`. |
+| `finalDeliveryEta` | Entrega al consignatario. Puede ser semanas posterior a la descarga; no es la llegada. |
+
+Que `arrived` llegue a `true` es definitivo: el backend lo conserva aunque una
+consulta posterior falle o la naviera ya no incluya el evento en su ventana de
+movimientos. Un buque que atracó no vuelve a estar en tránsito.
+
 Los estados posibles son los mismos en ambos lados:
 
 | Estado | Significado | ¿Reintentar? |
@@ -95,6 +111,8 @@ Todas son opcionales salvo las dos credenciales.
 | Variable | Default | Notas |
 | --- | --- | --- |
 | `SCRAPER_PROXY` | `socks5://127.0.0.1:40000` | Vacío = salida directa (solo para depurar) |
+| `SCRAPER_PROXY_CARRIERS` | `HAPAG_LLOYD` | Qué navieras salen por el proxy: Hapag lo necesita, MSC/Maersk rinden mejor directos. Vacío = ninguna |
+| `SCRAPER_PORT` | `MANZANILLO` | Puerto de descarga que se compara para decidir `arrived`. Vacío desactiva la comprobación |
 | `SCRAPER_HEADLESS` | `false` | En el workflow se ejecuta bajo `xvfb-run` |
 | `SCRAPER_LOCALE` | `es-PE` | `geoip=True` ajusta timezone/IP de WebRTC |
 | `SCRAPER_WAIT_SECONDS` | `25` | Espera máxima por payload tras cargar la página |
@@ -123,10 +141,10 @@ python scraper.py
 Pruebas:
 
 ```bash
-python -m unittest discover -s tests -v   # 16 tests, sin navegador
+python -m unittest discover -s tests -v   # 96 tests, sin navegador
 python scripts/e2e_intercept.py           # Camoufox real contra servidor local
 python scripts/e2e_full_flow.py           # flujo completo con backend falso
-cd backend && mvn verify                  # 12 tests de Spring Boot
+cd backend && mvn verify                  # 25 tests de Spring Boot
 ```
 
 ## Verificar los tres B/L (comprobación real)

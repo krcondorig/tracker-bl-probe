@@ -24,12 +24,17 @@ import sys
 import time
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from tracker.browser import BrowserSession, CaptureResult, run_with_retry
 from tracker.carriers import adapter_for
 from tracker.config import ConfigError, Settings, load_settings
-from tracker.containers import ParsedContainer, parse, split_csv
+from tracker.containers import (
+    ParsedContainer,
+    carrier_candidates,
+    parse,
+    split_csv,
+)
 from tracker.extract import extract
 from tracker.httpclient import BackendError, SpringClient
 from tracker.models import (
@@ -84,10 +89,22 @@ def configure_logging(level: str = "INFO") -> None:
 class Job:
     parsed: ParsedContainer
     index: int
+    # Navieras a probar si la principal no reconoce el contenedor. Solo se
+    # rellena cuando el prefijo es ambiguo (arrendador) y no hay pista externa.
+    alternatives: list[Carrier] = field(default_factory=list)
 
 
-def build_plan(raw_numbers: list[str], carriers: tuple[Carrier, ...], limit: int) -> tuple[list[Job], list[ContainerResult]]:
+def build_plan(
+    raw_numbers: list[str | tuple[str, str | None]],
+    carriers: tuple[Carrier, ...],
+    limit: int,
+) -> tuple[list[Job], list[ContainerResult]]:
     """Valida y ordena. Devuelve (trabajos a ejecutar, resultados ya decididos).
+
+    Acepta números sueltos o pares (número, naviera). El par lo usa el camino
+    del backend: allí ya se sabe de qué naviera es el contenedor cuando viene
+    de un B/L. Sin ese dato, los prefijos de arrendador (CAIU, DRYU, FCIU...)
+    se descartaban como INVALID sin llegar a consultarse.
 
     Los contenedores mal formados se resuelven sin red: no tiene sentido gastar
     una sesión de navegador en algo que la naviera va a rechazar.
@@ -96,8 +113,12 @@ def build_plan(raw_numbers: list[str], carriers: tuple[Carrier, ...], limit: int
     jobs: list[Job] = []
     allowed = set(carriers)
 
-    for raw in raw_numbers:
-        parsed = parse(raw)
+    for entry in raw_numbers:
+        if isinstance(entry, tuple):
+            raw, hint = entry
+        else:
+            raw, hint = entry, None
+        parsed = parse(raw, carrier_hint=hint)
         if not parsed.well_formed:
             pre_resolved.append(ContainerResult(
                 container_number=parsed.number or raw.strip().upper()[:11],
@@ -110,15 +131,26 @@ def build_plan(raw_numbers: list[str], carriers: tuple[Carrier, ...], limit: int
             ))
             continue
         if parsed.carrier is Carrier.UNKNOWN:
-            pre_resolved.append(ContainerResult(
-                container_number=parsed.number,
-                carrier=Carrier.UNKNOWN.value,
-                status=ResultStatus.INVALID.value,
-                attempts=0,
-                check_digit_valid=parsed.check_digit_ok,
-                error_code="UNKNOWN_CARRIER",
-                error_message=f"Prefijo {parsed.number[:4]} sin naviera configurada.",
-            ))
+            # Prefijo de arrendador (CAIU, DRYU, FCIU...). El prefijo no dice de
+            # qué naviera es, así que se prueban las habilitadas en vez de
+            # descartar el contenedor sin consultar. Antes se marcaba INVALID y
+            # 6 de los 8 contenedores del B/L de MSC no se consultaban nunca.
+            candidates = carrier_candidates(raw, carriers)
+            if not candidates:
+                pre_resolved.append(ContainerResult(
+                    container_number=parsed.number,
+                    carrier=Carrier.UNKNOWN.value,
+                    status=ResultStatus.INVALID.value,
+                    attempts=0,
+                    check_digit_valid=parsed.check_digit_ok,
+                    error_code="UNKNOWN_CARRIER",
+                    error_message=f"Prefijo {parsed.number[:4]} sin naviera configurada "
+                                  f"y no hay navieras habilitadas donde probarlo.",
+                ))
+                continue
+            parsed = parse(raw, carrier_hint=candidates[0])
+            jobs.append(Job(parsed=parsed, index=len(jobs),
+                            alternatives=candidates[1:]))
             continue
         if allowed and parsed.carrier not in allowed:
             log.info("[%s] Omitido: %s no está en el filtro de navieras", parsed.number, parsed.carrier.value)
@@ -133,9 +165,112 @@ def build_plan(raw_numbers: list[str], carriers: tuple[Carrier, ...], limit: int
     return jobs[:limit], pre_resolved
 
 
+def order_results(
+    results: list[ContainerResult],
+    jobs: list[Job],
+    pre_resolved: list[ContainerResult],
+) -> list[ContainerResult]:
+    """Devuelve el reporte en el orden del plan, sin duplicados.
+
+    Agrupar por proxy cambia el orden de ejecución (primero los directos, luego
+    los de WARP), pero el JSON de salida no debe cambiar por eso: el backend
+    compara por contenedor y un orden distinto ensucia los diffs.
+
+    Los `pre_resolved` van primero: son los descartados sin red, y ya venían
+    resueltos desde `build_plan`. Se deduplica por número porque un contenedor
+    puede haberse pre-resuelto y además consultado.
+    """
+    order = {job.parsed.number: position for position, job in enumerate(jobs)}
+
+    seen: set[str] = set()
+    ordered: list[ContainerResult] = []
+    for result in list(pre_resolved):
+        if result.container_number in seen:
+            continue
+        seen.add(result.container_number)
+        ordered.append(result)
+
+    planned = [r for r in results if r.container_number in order]
+    planned.sort(key=lambda r: order[r.container_number])
+    for result in planned:
+        if result.container_number in seen:
+            continue
+        seen.add(result.container_number)
+        ordered.append(result)
+
+    for result in results:
+        if result.container_number in seen:
+            continue
+        seen.add(result.container_number)
+        ordered.append(result)
+
+    return ordered
+
+
+def carrier_attempts(job: Job, settings: Settings) -> list[Carrier]:
+    """Navieras a consultar para este trabajo, en orden, sin salir del proxy.
+
+    El proxy se fija al lanzar el navegador, así que un trabajo solo puede usar
+    las navieras que comparten el proxy de su naviera principal. Si la principal
+    va directa y una alternativa necesita WARP (Hapag por defecto), esa
+    alternativa se descarta: probarla desde la sesión directa daría un 403 que
+    no dice nada sobre el contenedor y gastaría un intento.
+
+    Las alternativas descartadas no se pierden del todo: si el contenedor
+    tampoco está en las demás, el resultado queda NOT_FOUND y la próxima
+    ejecución lo reintenta. Consultar bloqueado es peor que no consultar.
+    """
+    primary = job.parsed.carrier
+    proxy = settings.proxy_for(primary)
+    plan = [primary]
+    for candidate in job.alternatives:
+        if settings.proxy_for(candidate) != proxy:
+            log.debug("[%s] Se omite %s: usa otro proxy que %s",
+                      job.parsed.number, candidate.value, primary.value)
+            continue
+        plan.append(candidate)
+    return plan
+
+
+def group_by_proxy(jobs: list[Job], settings: Settings) -> dict[str, list[Carrier]]:
+    """Agrupa las navieras de los trabajos por el proxy que les toca.
+
+    Hace falta porque el proxy se fija al **lanzar** el navegador: no se puede
+    cambiar por pestaña. Sin agrupar habría que elegir un proxy para todos, y
+    cualquiera de las dos opciones rompe algo: con WARP global, MSC falla de
+    forma intermitente; sin WARP, Hapag devuelve Managed Challenge.
+
+    La clave es el proxy ("" = directo) y el valor las navieras de ese grupo,
+    sin repetir y en el orden en que aparecen en el plan.
+    """
+    groups: dict[str, list[Carrier]] = {}
+    for job in jobs:
+        # Se registran también las alternativas: un contenedor ambiguo puede
+        # acabar consultándose en otra naviera, y ese grupo necesita su sesión
+        # (y su warm-up) aunque ningún trabajo empiece por ella.
+        for carrier in carrier_attempts(job, settings):
+            key = settings.proxy_for(carrier) or ""
+            carriers = groups.setdefault(key, [])
+            if carrier not in carriers:
+                carriers.append(carrier)
+    return groups
+
+
 # --------------------------------------------------------------------------- #
 # Ejecución de un contenedor
 # --------------------------------------------------------------------------- #
+def should_try_alternative(status: str, error_code: str | None) -> bool:
+    """¿Merece la pena probar otra naviera con este contenedor?
+
+    Solo cuando la respuesta dice claramente que el contenedor no es de esa
+    naviera. Un BLOCKED no se reintenta con otra: la IP ya está señalada y
+    desde ella solo empeora. Un TIMEOUT no dice nada sobre la naviera.
+    """
+    if status != ResultStatus.NOT_FOUND.value:
+        return False
+    return error_code in (None, "", "NOT_FOUND")
+
+
 def _failure_reason(capture: CaptureResult) -> tuple[str, str]:
     """Mapea un CaptureResult fallido a (status, error_code) del contrato."""
     if capture.blocked:
@@ -161,48 +296,71 @@ async def check_container(session: BrowserSession, job: Job, settings: Settings)
         log.warning("[%s] Dígito verificador inválido; se consulta igualmente", parsed.number)
 
     try:
-        capture, attempts = await run_with_retry(
-            session, parsed.carrier, parsed.number, settings.max_attempts
-        )
-        result.attempts = attempts
+        # Prefijo de arrendador sin pista: no se sabe de que naviera es, asi que
+        # se prueban las habilitadas. Solo las que comparten el proxy de la
+        # sesion: probar Hapag sin WARP devolveria un 403 inutil.
+        plan: list[Carrier] = carrier_attempts(job, settings)
+        total_attempts = 0
 
-        if capture.payload is None:
-            status, code = _failure_reason(capture)
-            result.status = status
-            result.error_code = code
-            result.error_message = capture.block_reason or (
-                f"Sin payload JSON tras {attempts} intento(s). "
-                f"Título: {capture.page_title or 'n/d'}. "
-                f"URLs vistas: {', '.join(u.split('?')[0][:80] for u in capture.candidate_urls) or 'ninguna'}"
+        for position, carrier in enumerate(plan):
+            capture, attempts = await run_with_retry(
+                session, carrier, parsed.number, settings.max_attempts
             )
-            log.warning("[%s] %s — %s", parsed.number, status, result.error_message[:180])
-            return result
+            total_attempts += attempts
+            result.carrier = carrier.value
+            result.attempts = total_attempts
 
-        outcome = extract(capture.payload.body, parsed.number)
-        if outcome.data is not None:
-            result.status = ResultStatus.OK.value
-            result.data = outcome.data
-            result.source_url = capture.payload.url
-            log.info(
-                "[%s] OK (%d eventos) — %s",
-                parsed.number, outcome.event_count, outcome.data.current_status or "sin estado",
-            )
-        elif outcome.not_found:
-            result.status = ResultStatus.NOT_FOUND.value
-            result.error_code = "NOT_FOUND"
-            result.error_message = outcome.message or "La naviera no conoce el contenedor."
-            result.source_url = capture.payload.url
-            log.info("[%s] No encontrado en %s", parsed.number, parsed.carrier.value)
-        elif outcome.blocked:
-            result.status = ResultStatus.BLOCKED.value
-            result.error_code = "ANTIBOT_CHALLENGE"
-            result.error_message = outcome.message
-        else:
-            result.status = ResultStatus.ERROR.value
-            result.error_code = "UNRECOGNIZED_SCHEMA"
-            result.error_message = outcome.message or "Payload JSON sin esquema de tracking reconocible."
-            result.source_url = capture.payload.url
-            log.warning("[%s] Payload no reconocido (%s)", parsed.number, capture.payload.url[:120])
+            if capture.payload is None:
+                status, code = _failure_reason(capture)
+                result.status = status
+                result.error_code = code
+                result.error_message = capture.block_reason or (
+                    f"Sin payload JSON tras {attempts} intento(s). "
+                    f"Título: {capture.page_title or 'n/d'}. "
+                    f"URLs vistas: {', '.join(u.split('?')[0][:80] for u in capture.candidate_urls) or 'ninguna'}"
+                )
+                log.warning("[%s] %s en %s — %s", parsed.number, status,
+                            carrier.value, result.error_message[:180])
+            else:
+                outcome = extract(capture.payload.body, parsed.number,
+                                  port=settings.discharge_port)
+                if outcome.data is not None:
+                    result.status = ResultStatus.OK.value
+                    result.data = outcome.data
+                    result.source_url = capture.payload.url
+                    result.error_code = None
+                    result.error_message = None
+                    log.info(
+                        "[%s] OK en %s (%d eventos) — %s",
+                        parsed.number, carrier.value, outcome.event_count,
+                        outcome.data.current_status or "sin estado",
+                    )
+                    return result
+                if outcome.not_found:
+                    result.status = ResultStatus.NOT_FOUND.value
+                    result.error_code = "NOT_FOUND"
+                    result.error_message = outcome.message or "La naviera no conoce el contenedor."
+                    result.source_url = capture.payload.url
+                    log.info("[%s] No encontrado en %s", parsed.number, carrier.value)
+                elif outcome.blocked:
+                    result.status = ResultStatus.BLOCKED.value
+                    result.error_code = "ANTIBOT_CHALLENGE"
+                    result.error_message = outcome.message
+                else:
+                    result.status = ResultStatus.ERROR.value
+                    result.error_code = "UNRECOGNIZED_SCHEMA"
+                    result.error_message = outcome.message or "Payload JSON sin esquema de tracking reconocible."
+                    result.source_url = capture.payload.url
+                    log.warning("[%s] Payload no reconocido (%s)",
+                                parsed.number, capture.payload.url[:120])
+
+            # Solo se pasa a la siguiente naviera si la actual dijo claramente
+            # que el contenedor no es suyo. Bloqueos y timeouts no se escalan.
+            has_more = position < len(plan) - 1
+            if not (has_more and should_try_alternative(result.status, result.error_code)):
+                return result
+            log.info("[%s] Se prueba la siguiente naviera: %s",
+                     parsed.number, plan[position + 1].value)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - un contenedor no debe tumbar el lote
@@ -242,26 +400,44 @@ async def run_async(settings: Settings, containers: list[str]) -> ResultsPayload
     log.info("Distribución: %s", dict(by_carrier.most_common()))
 
     session_error: str | None = None
-    async with BrowserSession(settings) as session:
-        if settings.warmup:
-            for carrier in dict.fromkeys(job.parsed.carrier for job in jobs):
-                log.info("Calentando sesión en %s", carrier.value)
-                try:
-                    await session.warm_up(carrier)
-                except Exception as exc:  # noqa: BLE001 - el warm-up nunca bloquea el lote
-                    session_error = f"warmup {carrier.value}: {exc}"
-                    log.warning("Warm-up de %s falló: %s", carrier.value, exc)
-                await asyncio.sleep(random.uniform(2.0, 4.0))
 
-        for position, job in enumerate(jobs, start=1):
-            log.info("── %d/%d · %s (%s)", position, len(jobs), job.parsed.number, job.parsed.carrier.value)
-            result = await check_container(session, job, settings)
-            results.append(result)
+    # Un navegador por proxy. El proxy se fija al lanzarlo, así que las navieras
+    # que van directas y las que van por WARP no pueden compartir sesión. Se
+    # agrupa en vez de lanzar un navegador por contenedor: arrancar Firefox
+    # cuesta ~5 s y reutilizar cookies ayuda a no parecer un bot.
+    groups = group_by_proxy(jobs, settings)
+    for proxy, carriers in groups.items():
+        label = proxy or "directo"
+        log.info("Grupo %s: %s", label, ", ".join(c.value for c in carriers))
+        subset = [
+            job for job in jobs
+            if any(settings.proxy_for(carrier) == (proxy or None)
+                   for carrier in carrier_attempts(job, settings))
+        ]
 
-            if position < len(jobs):
-                delay = random.uniform(settings.delay_min, settings.delay_max)
-                log.debug("Pausa de %.1fs antes del siguiente contenedor", delay)
-                await asyncio.sleep(delay)
+        async with BrowserSession(settings, proxy_url=proxy or None) as session:
+            if settings.warmup:
+                for carrier in carriers:
+                    log.info("Calentando sesión en %s (%s)", carrier.value, label)
+                    try:
+                        await session.warm_up(carrier)
+                    except Exception as exc:  # noqa: BLE001 - el warm-up nunca bloquea el lote
+                        session_error = f"warmup {carrier.value}: {exc}"
+                        log.warning("Warm-up de %s falló: %s", carrier.value, exc)
+                    await asyncio.sleep(random.uniform(2.0, 4.0))
+
+            for position, job in enumerate(subset, start=1):
+                log.info("── %s %d/%d · %s (%s)", label, position, len(subset),
+                         job.parsed.number, job.parsed.carrier.value)
+                result = await check_container(session, job, settings)
+                results.append(result)
+
+                if position < len(subset):
+                    delay = random.uniform(settings.delay_min, settings.delay_max)
+                    log.debug("Pausa de %.1fs antes del siguiente contenedor", delay)
+                    await asyncio.sleep(delay)
+
+    results = order_results(results, jobs, pre_resolved)
 
     duration_ms = int((time.perf_counter() - t0) * 1000)
     payload = ResultsPayload(
@@ -290,8 +466,15 @@ async def run_async(settings: Settings, containers: list[str]) -> ResultsPayload
     return payload
 
 
-def resolve_containers(settings: Settings) -> tuple[list[str], str]:
-    """Contenedores desde CLI/entrada o desde el backend. Devuelve (lista, origen)."""
+def resolve_containers(
+    settings: Settings,
+) -> tuple[list[str | tuple[str, str | None]], str]:
+    """Contenedores desde CLI/entrada o desde el backend. Devuelve (lista, origen).
+
+    Del backend se conserva la naviera que mande: es el único sitio donde llega
+    el dato del B/L. Aplanarla a strings obligaba a re-adivinar por el prefijo
+    y perdía los contenedores de arrendador.
+    """
     explicit = split_csv(settings.containers_raw)
     if explicit:
         log.info("%d contenedores recibidos por parámetro", len(explicit))
@@ -301,7 +484,7 @@ def resolve_containers(settings: Settings) -> tuple[list[str], str]:
     log.info("Consultando pendientes al backend %s", settings.spring_base_url)
     with SpringClient(settings) as client:
         pending = client.fetch_pending(limit=settings.max_containers)
-    return split_csv(",".join(pending)), "backend"
+    return list(pending), "backend"
 
 
 def main(argv: list[str] | None = None) -> int:

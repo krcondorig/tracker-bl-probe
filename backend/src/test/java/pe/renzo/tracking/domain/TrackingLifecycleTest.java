@@ -21,8 +21,8 @@ class TrackingLifecycleTest {
         Instant created = Instant.parse("2026-11-01T00:00:00Z");
         return new ContainerTracking(
                 "MSCU1234567", "MSC", status, currentStatus, "Callao", null, null,
-                null, null, List.of(), 1, lastAttemptAt, null, null, null,
-                "run-1", null, true, created, created);
+                null, false, null, null, null, null, List.of(), 1, lastAttemptAt, null, null,
+                null, "run-1", null, true, created, created);
     }
 
     @Test
@@ -67,8 +67,9 @@ class TrackingLifecycleTest {
         Instant now = Instant.now();
         ContainerTracking blocked = new ContainerTracking(
                 "MSCU1234567", "MSC", TrackingStatus.BLOCKED, "Discharged", "Callao", null, null,
-                null, null, List.of(), 2, now, now.plus(Duration.ofHours(6)), "ANTIBOT_CHALLENGE",
-                null, "run-1", null, true, now, now);
+                null, false, null, null, null, null, List.of(), 2, now,
+                now.plus(Duration.ofHours(6)), "ANTIBOT_CHALLENGE", null, "run-1", null, true,
+                now, now);
 
         assertThat(blocked.needsTracking(now, RECHECK)).isFalse();
         assertThat(blocked.needsTracking(now.plus(Duration.ofHours(7)), RECHECK)).isTrue();
@@ -89,11 +90,11 @@ class TrackingLifecycleTest {
         Instant now = Instant.now();
 
         repo.save(new ContainerTracking("MSCU1234567", "MSC", TrackingStatus.OK, "Discharged",
-                null, null, null, null, null, List.of(), 1, now, null, null, null,
-                "r", null, true, now, now));
+                null, null, null, null, false, null, null, null, null, List.of(), 1, now,
+                null, null, null, "r", null, true, now, now));
         repo.save(new ContainerTracking("MAEU7654321", "MAERSK", TrackingStatus.OK, "Delivered",
-                null, null, null, null, null, List.of(), 1, now.minus(Duration.ofDays(9)), null,
-                null, null, "r", null, true, now, now));
+                null, null, null, null, false, null, null, null, null, List.of(), 1,
+                now.minus(Duration.ofDays(9)), null, null, null, "r", null, true, now, now));
 
         assertThat(repo.findDue(now, 10, RECHECK)).isEmpty();
         assertThat(repo.findDue(now.plus(Duration.ofHours(21)), 10, RECHECK))

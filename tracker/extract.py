@@ -26,8 +26,13 @@ from typing import Any, Iterator
 from .models import TrackingData, TrackingEvent
 
 STATUS_KEYS = (
-    "statusname", "eventname", "statusdescription", "eventdescription",
-    "movename", "movetype", "eventtype", "transportevent", "activityname",
+    # `activity` es la clave de Maersk ("DISCHARG", "CONTAINER ARRIVAL").
+    # Va primero a propósito: en su payload el evento cuelga de un registro de
+    # ubicación con {"city": "MANZANILLO", "state": "CL"}, donde `state` es el
+    # estado mexicano (Colima), no un estado de envío. Si `state` se mira antes,
+    # el status queda en "CL" y la descarga nunca se detecta.
+    "activity", "activityname", "statusname", "eventname", "statusdescription",
+    "eventdescription", "movename", "movetype", "eventtype", "transportevent",
     "milestone", "status", "state", "description", "eventstatus",
 )
 TIME_KEYS = (
@@ -38,12 +43,18 @@ LOCATION_KEYS = (
     "locationname", "placename", "portname", "facilityname", "locationcity",
     "cityname", "city", "terminalname", "location", "place", "port", "countryname",
 )
-VESSEL_KEYS = ("vesselname", "vessel", "shipname", "transportname", "vehiclename")
+# "vessel" va al final como ultimo recurso: en MSC es un objeto {"IMO": "9320398"}
+# y quedarse con el daba el IMO como nombre de buque. _clean_vessel rechaza los
+# valores puramente numericos, y el nombre real viene en Detail o en vesselName.
+VESSEL_KEYS = ("vesselname", "shipname", "transportname", "vehiclename", "vessel")
 VOYAGE_KEYS = ("voyagenumber", "voyagerno", "carriervoyage", "voyageid", "voyage")
+# ETA de llegada al PUERTO. "etafinaldelivery" queda fuera a proposito: es la
+# entrega al consignatario, que en Maersk llega ~4 semanas despues de descargar.
 ETA_KEYS = (
-    "eta", "estimatedarrival", "estimateddateofarrival", "estimatedtimeofarrival",
-    "arrivaldate", "finaleta", "podeta",
+    "podetadate", "podeta", "eta", "estimatedarrival", "estimateddateofarrival",
+    "estimatedtimeofarrival", "arrivaldate",
 )
+FINAL_DELIVERY_KEYS = ("etafinaldelivery", "finaldeliveryeta", "finaleta")
 
 NOT_FOUND_RE = re.compile(
     r"(not\s*found|no\s+(?:data|results?|records?|shipments?)|invalid\s+(?:container|number|bl)"
@@ -194,6 +205,20 @@ def pick(flat: dict[str, str], priorities: tuple[str, ...]) -> str | None:
     return None
 
 
+def _first_scalar(node: dict, keys: tuple[str, ...]) -> str | None:
+    """Primer valor de texto en `node` para alguna de `keys` (normalizadas)."""
+    if not isinstance(node, dict):
+        return None
+    flat = {normalize_key(str(k)): v for k, v in node.items()}
+    for key in keys:
+        value = flat.get(key)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                return text
+    return None
+
+
 def _looks_like_event(entry: dict) -> tuple[bool, bool]:
     flat = flatten_scalars(entry)
     has_status = pick(flat, STATUS_KEYS) is not None
@@ -216,18 +241,53 @@ def score_collection(entries: list[dict]) -> float:
     return (status_hits / ratio) * 2.0 + (time_hits / ratio) * 1.5 + min(len(entries), 40) * 0.05
 
 
+_NUMERIC_RE = re.compile(r"^[\d\s.,-]+$")
+
+
+def _clean_vessel(value: str | None) -> str | None:
+    """Descarta valores que no son un nombre de buque.
+
+    MSC manda `Vessel: {"IMO": "9320398"}` junto al nombre real en `Detail`.
+    Un IMO, un código de 7 cifras o un numero de viaje no identifican al buque
+    de forma util, asi que se descartan en vez de propagarlos.
+    """
+    if not value:
+        return None
+    text = value.strip()
+    if not text or _NUMERIC_RE.match(text):
+        return None
+    return text
+
+
 def build_event(entry: dict) -> TrackingEvent | None:
     flat = flatten_scalars(entry)
     status = pick(flat, STATUS_KEYS)
     timestamp = format_timestamp(pick(flat, TIME_KEYS))
     if not status and not timestamp:
         return None
+
+    # MSC guarda ["MSC LAUSANNE VI", "QM639R"] en `detail`. Es la fuente mas
+    # fiable del nombre y del viaje cuando el campo vessel es un objeto.
+    detail = entry.get("Detail") or entry.get("detail")
+    detail_vessel = detail_voyage = None
+    if isinstance(detail, list):
+        for item in detail:
+            if isinstance(item, str) and item.strip() and _clean_vessel(item):
+                if detail_vessel is None:
+                    detail_vessel = item.strip()
+                elif detail_voyage is None:
+                    detail_voyage = item.strip()
+                    break
+
+    vessel = _clean_vessel(pick(flat, VESSEL_KEYS)) or detail_vessel
+    voyage = pick(flat, VOYAGE_KEYS) or detail_voyage
+
     return TrackingEvent(
         timestamp=timestamp,
         status=status,
         location=pick(flat, LOCATION_KEYS),
-        vessel=pick(flat, VESSEL_KEYS),
-        voyage=pick(flat, VOYAGE_KEYS),
+        vessel=vessel,
+        voyage=voyage,
     )
 
 
@@ -252,11 +312,88 @@ class ExtractionOutcome:
     message: str | None = None
 
 
-def extract(payload: Any, container: str) -> ExtractionOutcome:
-    """Convierte un payload JSON arbitrario en TrackingData normalizado."""
+# Estados con los que una naviera marca que el contenedor bajó del buque en
+# ese puerto. Se busca solo entre los eventos cuyo Location coincide con el
+# puerto de descarga, así que un "Discharged" en otro puerto no cuenta.
+# Listas que, por nombre, contienen eventos y no sitios.
+_EVENT_LIST_KEYS = frozenset({
+    "events", "eventos", "movements", "movimientos", "milestones", "hitos",
+    "activities", "actividades", "trackingevents", "eventlist",
+})
+
+# `arriv` suelto cubre "CONTAINER ARRIVAL", "Vessel arrived", "Arrival in".
+# Es la señal principal: el buque ya está en el puerto.
+_ARRIVAL_RE = re.compile(
+    r"(arriv|discharg|disembark|descarg|arrib|atrac)",
+    re.IGNORECASE,
+)
+_DEPARTURE_ONLY_RE = re.compile(r"(departure|departed|sail|salida|zarpa)", re.IGNORECASE)
+
+
+def _port_matches(text: str | None, port: str | None) -> bool:
+    if not text or not port:
+        return False
+    return port.strip().upper() in text.upper()
+
+
+def find_arrival(
+    events: list[TrackingEvent],
+    port: str | None,
+) -> tuple[bool, str | None, TrackingEvent | None]:
+    """¿Hubo llegada en `port`? Devuelve (llegó, fecha, evento).
+
+    En Maersk el mismo día hay dos hitos: "CONTAINER ARRIVAL" (el buque atraca,
+    12:28) y "DISCHARG" (el contenedor baja, 23:14). La pregunta es cuándo
+    llegó, así que gana el de llegada: el buque ya estaba en puerto antes de
+    descargar, y usar la descarga retrasaría la respuesta casi un día.
+
+    Dentro del mismo tipo gana la fecha más temprana: si el contenedor se
+    descargó, salió y volvió, la respuesta sigue siendo la primera llegada.
+    """
+    if not port:
+        return False, None, None
+    best: TrackingEvent | None = None
+    best_rank: tuple[int, datetime] | None = None
+    for event in events:
+        if not event.status or not _port_matches(event.location, port):
+            continue
+        if _DEPARTURE_ONLY_RE.search(event.status):
+            continue
+        if not _ARRIVAL_RE.search(event.status):
+            continue
+        stamp = parse_timestamp(event.timestamp) if event.timestamp else None
+        if stamp is None:
+            continue
+        rank = (_arrival_priority(event.status), stamp)
+        if best_rank is None or rank < best_rank:
+            best, best_rank = event, rank
+    if best is None:
+        return False, None, None
+    return True, best.timestamp, best
+
+
+def _arrival_priority(status: str) -> int:
+    """Menor gana: "llegó al puerto" antes que "lo descargaron"."""
+    lowered = status.lower()
+    if ("arriv" in lowered or "arrib" in lowered or "atrac" in lowered):
+        return 0
+    if "discharg" in lowered or "descarg" in lowered:
+        return 1
+    return 2
+
+
+def extract(payload: Any, container: str, port: str | None = None) -> ExtractionOutcome:
+    """Convierte un payload JSON arbitrario en TrackingData normalizado.
+
+    `port` es el puerto de descarga que interesa (p. ej. MANZANILLO). Sin él no
+    se puede afirmar si el contenedor llegó: `arrived` queda en False.
+    """
     text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
 
     # 1) Buscar la mejor colección de eventos, en cualquier profundidad.
+    #    Se prefiere la lista cuyos elementos PARECEN eventos de verdad. Con la
+    #    forma de Maersk (locations[].events[]) la lista de ubicaciones puntúa
+    #    alto por tener fechas, pero sus elementos son sitios, no eventos.
     best: list[dict] = []
     best_score = 0.0
     for collection in iter_dict_lists(payload):
@@ -264,8 +401,35 @@ def extract(payload: Any, container: str) -> ExtractionOutcome:
         if score > best_score:
             best, best_score = collection, score
 
+    # Los eventos anidados se recogen aparte: en Maersk cada ubicación trae los
+    # suyos y quedarse con la lista de ubicaciones pierde la descarga.
+    nested: list[dict] = []
+    for node in iter_dicts(payload):
+        for key, value in node.items():
+            if normalize_key(str(key)) not in _EVENT_LIST_KEYS or not isinstance(value, list):
+                continue
+            # El padre describe el sitio ({"city": "MANZANILLO", ...}); el hijo
+            # solo trae su código. Sin heredar, el evento queda con "MXZLOSM" y
+            # no hay forma de compararlo con el puerto que interesa.
+            parent_city = _first_scalar(node, LOCATION_KEYS)
+            parent_code = _first_scalar(node, ("locationcode", "code", "unlocode", "geoidcity"))
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                merged = dict(item)
+                if not _first_scalar(merged, LOCATION_KEYS) and parent_city:
+                    merged["city"] = parent_city
+                if not _first_scalar(merged, ("locationcode", "code", "unlocode")) and parent_code:
+                    merged["location_code"] = parent_code
+                nested.append(merged)
+
     events: list[TrackingEvent] = []
-    if best_score >= 1.5:
+    if nested and score_collection(nested) >= best_score:
+        for entry in nested:
+            event = build_event(entry)
+            if event:
+                events.append(event)
+    elif best_score >= 1.5:
         for entry in best:
             event = build_event(entry)
             if event:
@@ -299,14 +463,33 @@ def extract(payload: Any, container: str) -> ExtractionOutcome:
 
     latest = ordered[-1] if parse_timestamp(ordered[-1].timestamp) else ordered[0]
 
+    arrived, arrival_date, arrival_event = find_arrival(ordered, port)
+
+    # El buque que descargó es el del evento de llegada, no el del último
+    # evento: tras la descarga suele haber camión o tren, sin buque.
+    # El respaldo de la cabecera tambien pasa por el filtro: si el payload trae
+    # "vessel": "9320398" en la cabecera, seguiria colandose el IMO.
+    vessel = (arrival_event.vessel if arrival_event else None) or latest.vessel \
+        or _clean_vessel(pick(header_flat, VESSEL_KEYS))
+    voyage = (arrival_event.voyage if arrival_event else None) or latest.voyage \
+        or pick(header_flat, VOYAGE_KEYS)
+
+    # Si ya llegó, la ETA sobra: se conoce la fecha real de llegada y publicar
+    # una estimación junto a ella solo genera contradicciones.
+    eta = None if arrived else format_timestamp(pick(header_flat, ETA_KEYS))
+
     data = TrackingData(
         current_status=latest.status or pick(header_flat, STATUS_KEYS),
         location=latest.location or pick(header_flat, LOCATION_KEYS),
-        vessel=latest.vessel or pick(header_flat, VESSEL_KEYS),
-        voyage=latest.voyage or pick(header_flat, VOYAGE_KEYS),
-        eta=format_timestamp(pick(header_flat, ETA_KEYS)),
+        vessel=vessel,
+        voyage=voyage,
+        eta=eta,
         last_update=latest.timestamp or format_timestamp(pick(header_flat, TIME_KEYS)),
         events=ordered,
+        arrived=arrived,
+        arrival_date=arrival_date,
+        discharge_port=(port.strip().upper() if port else None),
+        final_delivery_eta=format_timestamp(pick(header_flat, FINAL_DELIVERY_KEYS)),
     )
     if data.is_empty():
         return ExtractionOutcome(None, message="Eventos detectados pero sin campos útiles")

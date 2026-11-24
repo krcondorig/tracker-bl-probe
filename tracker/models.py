@@ -71,6 +71,19 @@ class TrackingData:
     last_update: str | None = None
     events: list[TrackingEvent] = field(default_factory=list)
 
+    # La pregunta del negocio: ¿el buque ya llegó al puerto de descarga?
+    # current_status/location son el ÚLTIMO evento, que tras la descarga suele
+    # ser un movimiento terrestre (p. ej. "CX" en MEXICO CITY), así que no
+    # sirven para responder esto.
+    arrived: bool = False
+    arrival_date: str | None = None
+    discharge_port: str | None = None
+
+    # ETA de entrega final al consignatario. NO es la llegada al puerto: en
+    # Maersk puede ser semanas posterior (entrega en MEXICO CITY tras descargar
+    # en Manzanillo). Se guarda aparte para no confundirla con `eta`.
+    final_delivery_eta: str | None = None
+
     def is_empty(self) -> bool:
         return not any(
             (self.current_status, self.location, self.vessel, self.voyage, self.eta, self.events)
@@ -84,6 +97,10 @@ class TrackingData:
             "voyage": self.voyage,
             "eta": self.eta,
             "lastUpdate": self.last_update,
+            "arrived": self.arrived,
+            "arrivalDate": self.arrival_date,
+            "dischargePort": self.discharge_port,
+            "finalDeliveryEta": self.final_delivery_eta,
             "events": [e.to_dict() for e in self.events],
         }
 
