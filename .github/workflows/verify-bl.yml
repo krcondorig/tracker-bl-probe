@@ -103,13 +103,19 @@ jobs:
           # un update restringido al repo de WARP lo deja sin candidato.
           sudo apt-get update -qq
           mark "apt-get update"
-          if ! sudo apt-get install -y -qq -o Acquire::Retries=3 cloudflare-warp; then
+          # `--no-install-recommends` es la diferencia entre 15 min y ~1 min.
+          # Sin él, apt instala las recomendaciones de WARP, que arrastran la
+          # GUI (libwebkit2gtk-4.1-0, gstreamer completo, libayatana...) y suman
+          # cientos de MB. Aquí solo se usan `warp-cli` y `warp-svc`: el
+          # escritorio no hace falta.
+          if ! sudo apt-get install -y -qq --no-install-recommends \
+               -o Acquire::Retries=3 cloudflare-warp; then
             echo "::warning::cloudflare-warp no instaló a la primera; se inspecciona la dependencia."
             apt-cache policy libtss2-tctildr0t64 || true
-            sudo apt-get install -y -qq libtss2-tctildr0t64 \
-              || sudo apt-get install -y -qq libtss2-tctildr0 \
+            sudo apt-get install -y -qq --no-install-recommends libtss2-tctildr0t64 \
+              || sudo apt-get install -y -qq --no-install-recommends libtss2-tctildr0t \
               || true
-            sudo apt-get install -y -qq -f cloudflare-warp
+            sudo apt-get install -y -qq --no-install-recommends -f cloudflare-warp
           fi
           mark "apt-get install"
           warp-cli --version
