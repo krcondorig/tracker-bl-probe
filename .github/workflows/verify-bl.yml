@@ -106,6 +106,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/ensure_camoufox.py
 
+      - name: Cache paquetes .deb de WARP
+        uses: actions/cache@v4
+        with:
+          # Medido: la instalación tarda ~880s y de esos, ~820s son DESCARGAR
+          # los 130 .deb de las dependencias de WARP; `dpkg` solo tarda ~59s.
+          # Cachear los .deb convierte la descarga en una copia local.
+          # La clave incluye la versión de WARP: si cambia, se rebaja de nuevo.
+          path: ~/.warp-debs
+          key: warp-debs-${{ runner.os }}-v1
+
       - name: Instalar Cloudflare WARP
         run: |
           set -euo pipefail
@@ -123,6 +133,15 @@ jobs:
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" \
             | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
           mark "repo configurado"
+
+          # Si el cache trae los .deb, se instalan desde disco: ni red ni espera.
+          CACHE_DEBS="$HOME/.warp-debs"
+          mkdir -p "$CACHE_DEBS"
+          if compgen -G "$CACHE_DEBS/*.deb" > /dev/null; then
+            echo "Instalando $(ls -1 "$CACHE_DEBS"/*.deb | wc -l) .deb desde el cache"
+            sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 \
+              $(ls -1 "$CACHE_DEBS"/*.deb) && mark "install desde cache" || true
+          fi
           # Update completo: libtss2-tctildr0t64 vive en el pocket `security` y
           # un update restringido al repo de WARP lo deja sin candidato.
           sudo apt-get update -qq
@@ -142,6 +161,19 @@ jobs:
             sudo apt-get install -y -qq --no-install-recommends -f cloudflare-warp
           fi
           mark "apt-get install"
+
+          # Diagnóstico: cuánto pesa cada cosa. Sirve para saber si el cuello de
+          # botella es el paquete de Cloudflare o las dependencias de Ubuntu.
+          echo "[datos] tamaño del repo de WARP:"
+          du -sh /var/cache/apt/archives 2>/dev/null || true
+          ls -1 /var/cache/apt/archives/*.deb 2>/dev/null | wc -l || true
+
+          # Guardar los .deb para la próxima ejecución.
+          if compgen -G "/var/cache/apt/archives/*.deb" > /dev/null; then
+            cp -n /var/cache/apt/archives/*.deb "$CACHE_DEBS/" 2>/dev/null || true
+            echo "[datos] .deb en cache: $(ls -1 "$CACHE_DEBS"/*.deb | wc -l), $(du -sh "$CACHE_DEBS" | cut -f1)"
+          fi
+
           warp-cli --version
 
       - name: Conectar WARP por SOCKS5
