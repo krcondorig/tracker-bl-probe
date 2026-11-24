@@ -91,6 +91,8 @@ jobs:
           set -o pipefail
           python scripts/probe_hapag_listing.py socks5://127.0.0.1:40000 \
             2>&1 | tee probe.log || true
+          python scripts/probe_hapag_detail.py socks5://127.0.0.1:40000 \
+            2>&1 | tee probe-detail.log || true
 
       - name: Resumen
         if: always()
@@ -99,6 +101,7 @@ jobs:
             echo "## Sonda Hapag"
             echo '```'
             sed -n '/RESUMEN/,$p' probe.log || echo "(sin resumen)"
+            sed -n '/RESUMEN/,$p' probe-detail.log || echo "(sin resumen de detalle)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -108,5 +111,7 @@ jobs:
           name: hapag-probe
           path: |
             probe.log
+            probe-detail.log
             hapag-probe.json
+            hapag-detail-probe.json
           if-no-files-found: ignore
