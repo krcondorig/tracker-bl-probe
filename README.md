@@ -141,7 +141,7 @@ python scraper.py
 Pruebas:
 
 ```bash
-python -m unittest discover -s tests -v   # 96 tests, sin navegador
+python -m unittest discover -s tests -v   # 102 tests, sin navegador
 python scripts/e2e_intercept.py           # Camoufox real contra servidor local
 python scripts/e2e_full_flow.py           # flujo completo con backend falso
 cd backend && mvn verify                  # 25 tests de Spring Boot
@@ -167,11 +167,9 @@ El workflow `.github/workflows/verify-bl.yml` lo corre en dos columnas
 | --- | --- | --- |
 | MSC | Rellenar `#trackingNumber` y pulsar Enter. Los deep links `?trackingNumber=` no disparan el XHR. | No |
 | Maersk | Deep link `https://www.maersk.com/tracking/{bl}`: dispara el XHR solo. | No |
-| Hapag-Lloyd | Listado en `track-by-booking-solution-legacy.html?blno={bl}` y **clic real** en `Details`. | Sí (WARP) |
+| Hapag-Lloyd | URL `track-by-container-solution-legacy.html?view=S8510&container={ctr}`: ya devuelve el detalle, sin listado ni botón. | Sí (WARP) |
 
-### Hapag-Lloyd: por qué no es una URL
-
-Es el caso raro y conviene tenerlo escrito, porque el camino intuitivo falla:
+### Hapag-Lloyd: qué falló y qué se midió
 
 1. `hapag-lloyd.com` bloquea por **reputación de IP**: desde una IP de
    residencial peruana o desde el runner directo devuelve *Managed Challenge*.
@@ -179,16 +177,19 @@ Es el caso raro y conviene tenerlo escrito, porque el camino intuitivo falla:
 2. La SPA nueva (`/solutions/tracking/#/{bl}`) **no sirve**: su API
    (`tracking.api.hlag.cloud/api/tracking/v3/events`) falla con `NetworkError`
    por CORS desde el navegador, en las cuatro variantes de versión.
-3. El detalle **no es una URL** que se pueda componer. El listado es un
-   formulario JSF; `Details` es un `type="button"` manejado por ExtJS que envía
-   un POST con el `javax.faces.ViewState` de la sesión. Armar
-   `?view=S8510&container=...` a mano devuelve la shell de la SPA, no el detalle.
-   Por eso se marca el radio y se pulsa el botón de verdad.
-4. El número del contenedor viene relleno con **dos espacios**
-   (`HLBU  2959982`) y el submit los codifica como `++`. Por eso el parámetro
-   real es `container=HLBU++2959982`. Esos espacios se leen del HTML servido:
-   el DOM los colapsa y produce `HLBU+2959982`, que no encuentra el detalle.
-5. La página de detalle es **HTML con una tabla de movimientos**, no JSON.
+3. **La URL del detalle sí se puede componer.** Medido en el runner con dos
+   contenedores del mismo B/L: `track-by-container-solution-legacy.html`
+   `?view=S8510&container=HLBU++2959982` devuelve la tabla del contenedor
+   pedido, y el otro contenedor devuelve otra tabla (`2026-08-22 14:30` frente a
+   `2026-08-14 06:44`). No hace falta listado, ni radio, ni pulsar `Details`.
+4. La versión anterior del scraper esperaba **radios de listado** y pulsaba
+   `Details` — cosas que solo existen en la variante por B/L. Por eso todo
+   contenedor acababa en «El listado de Hapag no trajo contenedores».
+5. El número se pide con el relleno del sitio (`HLBU  2959982` → `++`), que es
+   la forma medida; la compacta no se comprobó.
+6. La página de detalle es **HTML con una tabla de movimientos**, no JSON. Se
+   reconoce por sus estados (`is_real_detail`), no por el largo del texto: la
+   shell de la SPA y el detalle pesan igual en bytes.
 
 ## Backend Spring Boot
 

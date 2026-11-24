@@ -22,9 +22,10 @@ Orden acordado con el usuario: 2 → 3 → 1 → 4.
 
 ## 3. Hapag-Lloyd en tracker/ (hueco 1)
 
-- Portar de `check_bl.py`: listing legacy, radio, click Details, tabla HTML.
-- `carriers.py` cambia el deep_link a la URL legacy.
+- Medido: `track-by-container-solution-legacy.html?view=S8510&container=` ya
+  devuelve el detalle del contenedor. No hay listado ni botón `Details`.
 - `browser.py` necesita un camino HTML, no solo JSON interceptado.
+- `is_real_detail` distingue el detalle de la shell de la SPA por sus estados.
 
 ## 4. ETA correcta (hueco 4)
 
@@ -37,7 +38,7 @@ Orden acordado con el usuario: 2 → 3 → 1 → 4.
 | --- | --- | --- |
 | 2. Carrier desde el backend | Hecho | `containers.parse(carrier_hint=)`, `carrier_candidates`, `Job.alternatives`, `httpclient.parse_pending_entries` |
 | 3. ¿Llegó al puerto? | Hecho (Python + Java) | `extract.find_arrival`, `TrackingData.arrived`, `ContainerTracking.arrived` (monotónico), `TrackingView.arrived` |
-| 1. Hapag-Lloyd en `tracker/` | Hecho (Python) | `tracker/hapag.py` + `browser._capture_hapag` / `_open_hapag_detail` |
+| 1. Hapag-Lloyd en `tracker/` | Hecho y verificado en el runner | `tracker/hapag.py` + `browser._capture_hapag` (URL directa al detalle) |
 | 4. ETA trampa | Hecho | `etafinaldelivery` fuera de `ETA_KEYS` → `finalDeliveryEta`; sin `eta` si `arrived` |
 
 Descartado al implementar: ampliar `DEFAULT_PREFIXES`. El backend usa la misma
@@ -47,6 +48,6 @@ conocida y no deducirla del prefijo.
 
 ## Verificación
 
-- `python -m unittest discover -s tests` — 96 tests, verde
+- `python -m unittest discover -s tests` — 102 tests, verde
 - `mvn -B -ntp verify` — 25 tests, verde
 - `verify-bl.yml` verde en GitHub
