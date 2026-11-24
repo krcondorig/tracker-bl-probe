@@ -21,6 +21,7 @@ resultados a un backend Spring Boot.
 .
 ├── .github/workflows/
 │   ├── scraper.yml           # WARP + Camoufox + ejecución (cron 13:00 UTC / dispatch)
+│   ├── verify-bl.yml         # B/L reales contra las 3 navieras (directo + WARP)
 │   └── ci.yml                # tests de Python y de Spring Boot
 ├── scraper.py                # orquestador (CLI)
 ├── requirements.txt
@@ -35,6 +36,8 @@ resultados a un backend Spring Boot.
 │   └── report.py             # resumen, JSON y GitHub Step Summary
 ├── tests/test_tracker.py     # 16 tests del núcleo
 ├── scripts/
+│   ├── check_bl.py           # verificador real de B/L (sin el paquete tracker)
+│   ├── ensure_camoufox.py    # instala Camoufox desde el caché, sin api.github.com
 │   ├── smoke_extract.py      # normalizador contra payloads de las 3 navieras
 │   ├── e2e_intercept.py      # Camoufox real capturando un XHR local
 │   └── e2e_full_flow.py      # backend falso → navegador → webhook
@@ -125,6 +128,49 @@ python scripts/e2e_intercept.py           # Camoufox real contra servidor local
 python scripts/e2e_full_flow.py           # flujo completo con backend falso
 cd backend && mvn verify                  # 12 tests de Spring Boot
 ```
+
+## Verificar los tres B/L (comprobación real)
+
+`scripts/check_bl.py` es el verificador independiente: no importa el paquete
+`tracker` y sirve para confirmar que el acceso a las tres navieras funciona de
+verdad, que es el problema difícil (challenges, no parseo).
+
+```bash
+python scripts/check_bl.py MEDUADP85690 275792562 HLCUNG12607EKZE0
+python scripts/check_bl.py HLCUNG12607EKZE0 --proxy socks5://127.0.0.1:40000
+```
+
+El workflow `.github/workflows/verify-bl.yml` lo corre en dos columnas
+(`directo` y `warp`) con esos tres B/L y publica el resumen en el Step Summary.
+
+### Cómo se consulta cada naviera (verificado)
+
+| Naviera | Vía real | Proxy |
+| --- | --- | --- |
+| MSC | Rellenar `#trackingNumber` y pulsar Enter. Los deep links `?trackingNumber=` no disparan el XHR. | No |
+| Maersk | Deep link `https://www.maersk.com/tracking/{bl}`: dispara el XHR solo. | No |
+| Hapag-Lloyd | Listado en `track-by-booking-solution-legacy.html?blno={bl}` y **clic real** en `Details`. | Sí (WARP) |
+
+### Hapag-Lloyd: por qué no es una URL
+
+Es el caso raro y conviene tenerlo escrito, porque el camino intuitivo falla:
+
+1. `hapag-lloyd.com` bloquea por **reputación de IP**: desde una IP de
+   residencial peruana o desde el runner directo devuelve *Managed Challenge*.
+   Con WARP pasa.
+2. La SPA nueva (`/solutions/tracking/#/{bl}`) **no sirve**: su API
+   (`tracking.api.hlag.cloud/api/tracking/v3/events`) falla con `NetworkError`
+   por CORS desde el navegador, en las cuatro variantes de versión.
+3. El detalle **no es una URL** que se pueda componer. El listado es un
+   formulario JSF; `Details` es un `type="button"` manejado por ExtJS que envía
+   un POST con el `javax.faces.ViewState` de la sesión. Armar
+   `?view=S8510&container=...` a mano devuelve la shell de la SPA, no el detalle.
+   Por eso se marca el radio y se pulsa el botón de verdad.
+4. El número del contenedor viene relleno con **dos espacios**
+   (`HLBU  2959982`) y el submit los codifica como `++`. Por eso el parámetro
+   real es `container=HLBU++2959982`. Esos espacios se leen del HTML servido:
+   el DOM los colapsa y produce `HLBU+2959982`, que no encuentra el detalle.
+5. La página de detalle es **HTML con una tabla de movimientos**, no JSON.
 
 ## Backend Spring Boot
 
