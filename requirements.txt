@@ -1,0 +1,14 @@
+# --- Motor de navegación anti-bot -------------------------------------------
+# camoufox lanza Firefox parcheado a nivel de binario (no es un stealth en JS).
+# El extra [geoip] instala maxminddb para derivar zona horaria, locale y la IP
+# de WebRTC desde la IP de salida (WARP), lo que hace coherente TLS/IP/fingerprint.
+#
+# IMPORTANTE: 0.5.x es la primera rama compatible con Playwright >= 1.55.
+# La rama 0.4.x fija playwright sin cota superior y, con Playwright 1.6x,
+# el protocolo Juggler falla al crear el contexto
+# ("Browser.setDownloadOptions ... not described in this scheme").
+camoufox[geoip]>=0.5.9,<0.6
+
+# --- Cliente HTTP para hablar con Spring Boot -------------------------------
+# httpx soporta HTTP/2, timeouts granulares y proxies SOCKS5 (via [socks]).
+httpx[http2,socks]>=0.27,<0.29

@@ -1,0 +1,219 @@
+name: Probe B/L access
+
+# Workflow DESECHABLE. No es el scraper de producción: sirve solo para
+# responder una pregunta con evidencia en el log, no con predicciones.
+#
+#   ¿Las navieras responden igual desde un runner de GitHub como desde una
+#   IP residencial, o el challenge es cuestión de reputación de IP?
+#
+# Corre los tres B/L reales en dos escenarios en paralelo:
+#   - "directo"  -> IP del runner (Azure), sin proxy
+#   - "warp"     -> saliendo por Cloudflare WARP (SOCKS5 :40000)
+#
+# Es de solo lectura: no toca el backend, no hace POST a ningún sitio.
+# Cuando tengas la respuesta, este archivo se puede borrar.
+
+on:
+  workflow_dispatch:
+    inputs:
+      references:
+        description: "B/L a probar (separados por comas)."
+        required: false
+        default: "MEDUADP85690,275792562,HLCUNG12607EKZE0"
+        type: string
+      wait_seconds:
+        description: "Segundos de espera por B/L."
+        required: false
+        default: "40"
+        type: string
+      headed:
+        description: "Navegador visible dentro de Xvfb (más fiel a un Firefox real)."
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe (${{ matrix.route }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        route: [directo, warp]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -qq
+          # libasound2 se llama libasound2t64 en Ubuntu 24.04. Firefox lo carga
+          # al arrancar, así que se intenta el nombre nuevo y se cae al viejo.
+          sudo apt-get install -y -qq --no-install-recommends \
+            xvfb dbus-x11 libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 \
+            libxtst6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+            libgbm1 libpango-1.0-0 libcairo2 libatk1.0-0 libatk-bridge2.0-0 \
+            libnss3 libnspr4 libasound2t64 fonts-liberation \
+            2>/dev/null || sudo apt-get install -y -qq --no-install-recommends \
+            xvfb dbus-x11 libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 \
+            libxtst6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+            libgbm1 libpango-1.0-0 libcairo2 libatk1.0-0 libatk-bridge2.0-0 \
+            libnss3 libnspr4 libasound2 fonts-liberation
+
+      # ------------------------------------------------------------------ #
+      # WARP solo en la columna "warp"
+      # ------------------------------------------------------------------ #
+      - name: Install Cloudflare WARP
+        if: matrix.route == 'warp'
+        run: |
+          set -euo pipefail
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+            | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+          if ! sudo apt-get update -qq -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/cloudflare-client.list -o Dir::Etc::sourceparts=-; then
+            echo "::warning::Repositorio WARP sin soporte para '${CODENAME}'; usando 'any'."
+            echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ any main" \
+              | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+            sudo apt-get update -qq
+          fi
+          sudo apt-get install -y -qq cloudflare-warp
+          warp-cli --version
+
+      - name: Connect WARP through SOCKS5
+        if: matrix.route == 'warp'
+        run: |
+          set -euo pipefail
+          if ! sudo systemctl enable --now warp-svc 2>/dev/null; then
+            sudo nohup warp-svc >/tmp/warp-svc.log 2>&1 &
+          fi
+          for i in $(seq 1 30); do
+            warp-cli --accept-tos status >/dev/null 2>&1 && break
+            sleep 1
+          done
+          if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
+            warp-cli --accept-tos registration new
+          fi
+          warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos proxy port 40000
+          warp-cli --accept-tos connect
+          for i in $(seq 1 40); do
+            STATE="$(warp-cli --accept-tos status 2>/dev/null || echo unknown)"
+            echo "warp: ${STATE}"
+            case "$STATE" in *Connected*|*Proxy*) break ;; esac
+            sleep 2
+          done
+
+      # ------------------------------------------------------------------ #
+      # Python + Camoufox
+      # ------------------------------------------------------------------ #
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Cache Camoufox browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            camoufox-${{ runner.os }}-
+
+      - name: Install Python dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Fetch Camoufox browser
+        run: python -m camoufox fetch
+
+      # ------------------------------------------------------------------ #
+      # De dónde sale el tráfico: sin esto el resto no se interpreta
+      # ------------------------------------------------------------------ #
+      - name: Show egress IP
+        run: |
+          set -euo pipefail
+          DIRECT="$(curl -s --max-time 15 https://api.ipify.org || echo unreachable)"
+          echo "IP directa del runner: ${DIRECT}"
+          if [ "${{ matrix.route }}" = "warp" ]; then
+            PROXIED="$(curl -s --max-time 25 --socks5-hostname 127.0.0.1:40000 https://api.ipify.org || echo unreachable)"
+            echo "IP vía WARP: ${PROXIED}"
+            if [ "${PROXIED}" = "unreachable" ]; then
+              echo "::error::El proxy SOCKS5 no responde; esta columna no probaría nada."
+              exit 1
+            fi
+            echo "EGRESS_IP=${PROXIED}" >> "$GITHUB_ENV"
+          else
+            echo "EGRESS_IP=${DIRECT}" >> "$GITHUB_ENV"
+          fi
+
+      # ------------------------------------------------------------------ #
+      # La prueba
+      # ------------------------------------------------------------------ #
+      - name: Run probe
+        env:
+          REFS: ${{ github.event.inputs.references || 'MEDUADP85690,275792562,HLCUNG12607EKZE0' }}
+          WAIT: ${{ github.event.inputs.wait_seconds || '40' }}
+          HEADED: ${{ github.event.inputs.headed }}
+          ROUTE: ${{ matrix.route }}
+        run: |
+          set -uo pipefail
+
+          FLAGS=()
+          if [ "${ROUTE}" = "warp" ]; then
+            FLAGS+=(--proxy socks5://127.0.0.1:40000)
+          fi
+          if [ "${HEADED}" = "true" ]; then
+            FLAGS+=(--headed)
+          fi
+
+          # `|| true` a propósito: un fallo aquí es un DATO, no un error de CI.
+          # Queremos leer el resultado, no ver la corrida en rojo.
+          xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" \
+            python scripts/check_bl.py \
+              ${REFS//,/ } \
+              --wait "${WAIT}" \
+              --dump "probe-dumps/${ROUTE}" \
+              "${FLAGS[@]}" \
+            2>&1 | tee "probe-${ROUTE}.log" || true
+
+          # Resumen legible en la página del run.
+          {
+            echo "## Ruta: \`${ROUTE}\`"
+            echo ""
+            echo "IP de salida: \`${EGRESS_IP}\`"
+            echo ""
+            echo '```'
+            grep -E "^B/L |RESUMEN:|RESULTADO:|payload crudo:" \
+              "probe-${ROUTE}.log" || echo "(sin líneas de resultado)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload probe output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-${{ matrix.route }}-${{ github.run_id }}
+          path: |
+            probe-${{ matrix.route }}.log
+            probe-dumps/${{ matrix.route }}/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: WARP diagnostics
+        if: failure() && matrix.route == 'warp'
+        run: |
+          warp-cli --accept-tos status || true
+          sudo journalctl -u warp-svc --no-pager -n 40 || true

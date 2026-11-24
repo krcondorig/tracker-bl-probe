@@ -1,0 +1,585 @@
+[
+  {
+    "Language": "de",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "myMSC Login"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "Multifaktor-Authentifizierung"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "Kennwort zurücksetzen"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "Kennwort ändern"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "Registrieren"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "Bearbeitungsprofil"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "Allgemeine Geschäftsbedingungen"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>Wir unternehmen zusätzliche Schritte, um sicherzustellen, dass Sie der sind, von dem Sie sagen, dass Sie er sind, wenn Sie sich anmelden.<br />Diese zusätzliche Sicherheitsüberprüfung wird auch als Zwei-Faktor-Überprüfung bezeichnet. Es besteht aus einer Kombination Ihres Benutzernamens, Passworts und eines mobilen Geräts oder Telefons.</p><p>Die Zwei-Faktor-Überprüfung ist sicherer als nur ein Kennwort, da sie auf zwei Arten der Authentifizierung beruht:</p><ul><li>Etwas, das Sie wissen, wie Ihr Passwort.</li><li>Etwas, das Sie haben, wie ein Telefon oder ein anderes Gerät, das Sie tragen.</li></ul><p>Die Zwei-Faktor-Überprüfung kann dazu beitragen, dass böswillige Hacker nicht vorgeben, Sie zu sein. Selbst wenn sie Ihr Passwort haben, ist es unwahrscheinlich, dass sie auch Ihr Gerät haben.</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "Um die Sicherheit zu erhöhen, wird die myMSC Multi-Faktor-Authentifizierung (MFA) bald keine Unterstützung mehr für Telefon per SMS und Telefon per Anruf bieten. Die Verwendung der Authenticator-App-Methode wird für eine sicherere Überprüfung empfohlen. Für detaillierte Anweisungen lesen Sie bitte den <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>Benutzerleitfaden.</a>"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "WICHTIGER HINWEIS: Es wird dringend empfohlen, sich immer mit einer E-Mail-Adresse zu registrieren, die einer physischen Person zugeordnet ist. Wenn Ihr Konto jedoch auf einem gemeinsamen Postfach basiert, wählen Sie die E-Mail-Option als MFA-Methode aufgrund der begrenzten Anzahl gleichzeitiger Geräte, die vom Authenticator unterstützt werden. Bitte beachten Sie, dass die für die Registrierung verwendete E-Mail-Adresse nicht geändert werden kann."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "Unsere gesamte Kommunikation ist auf Ihre Geschäftsanforderungen zugeschnitten. Möchten Sie Ihr Interesse mitteilen? Bitte klicken Sie <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>hier</a>."
+      }
+    ]
+  },
+  {
+    "Language": "en",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "myMSC Login"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "Multi-factor Authentication"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "Reset Password"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "Change password"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "Register"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "Edit Profile"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "Terms And Conditions"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>We are taking extra steps to make sure you are who you say you are when you sign in.<br />This extra security verification is also known as two-factor verification. It consists of a combination of your username, password, and a mobile device or phone.</p><p>Two-factor verification is more secure than just a password because it relies on two forms of authentication:</p><ul><li>Something you know, like your password.</li><li>Something you have, like a phone or other device that you carry.</li></ul><p>Two-factor verification can help stop malicious hackers from pretending to be you. Even if they have your password, the odds are that they don't have your device, too.</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "For enhanced security, myMSC recommends using the Authenticator App as the preferred Multi-Factor Authentication (MFA) method. The Authenticator App provides a secure and easy verification experience. For setup instructions, please refer to the <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>User Guide.</a>"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "IMPORTANT NOTE: It is highly recommended to always register with an email associated with a physical person. However, if your account is based on a shared mailbox, select the email option as the MFA method due to the limited number of concurrent devices supported by the Authenticator. Please note that the email address used for registration cannot be changed."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "All our communications are tailored to fit your business needs. Would you like to update your interest? Please click <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>here</a>."
+      }
+    ]
+  },
+  {
+    "Language": "es",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "myMSC Login"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "Autenticación multifactor"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "Restablecer contraseña"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "Cambiar contraseña"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "Registro"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "Editar perfil"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "Términos y condiciones"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>Estamos tomando medidas adicionales para asegurarnos de que sea quien dice ser cuando ingresa.<br />Esta verificación de seguridad adicional también se conoce como verificación de dos factores. Consiste en una combinación de su nombre de usuario, contraseña y un dispositivo móvil o teléfono.</p><p>La verificación de dos factores es más segura que una simple contraseña porque se basa en dos formas de autenticación:</p><ul><li>Algo que sepas, como tu contraseña.</li><li>Algo que tenga, como un teléfono u otro dispositivo que lleve consigo.</li></ul><p>La verificación de dos factores puede ayudar a evitar que los piratas informáticos malintencionados se hagan pasar por usted. Incluso si tienen tu contraseña, es poco probable que también tengan tu dispositivo </p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "Para mejorar la seguridad, la autenticación multifactor (MFA) de myMSC pronto dejará de admitir métodos de teléfono por SMS y teléfono por llamada. Se sugiere el uso del método de la aplicación Authenticator para una verificación más segura. Para obtener instrucciones detalladas, consulte la <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>Guía del usuario.</a>"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "NOTA IMPORTANTE: Se recomienda encarecidamente registrarse siempre con un correo electrónico asociado a una persona física. Sin embargo, si su cuenta se basa en un buzón compartido, seleccione la opción de correo electrónico como método MFA debido al número limitado de dispositivos simultáneos compatibles con el Authenticator. Tenga en cuenta que la dirección de correo electrónico utilizada para el registro no se puede cambiar."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "Todas nuestras comunicaciones se adaptan a las necesidades de su empresa. ¿Le gustaría actualizar su interés? Haga clic <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>aquí</a>."
+      }
+    ]
+  },
+  {
+    "Language": "fr",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "myMSC Login"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "Authentification multifactorielle"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "Réinitialiser le mot de passe"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "Changer de mot de passe"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "Registre"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "Modifier le profil"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "Termes et conditions"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>Nous prenons des mesures supplémentaires pour nous assurer que vous êtes qui vous dites d'être lorsque vous vous connectez.<br />Cette vérification de sécurité supplémentaire est également connue sous le nom de vérification à deux facteurs. Il se compose d'une combinaison de votre nom d'utilisateur, mot de passe et d'un appareil mobile ou téléphone.</p><p>La vérification à deux facteurs est plus sûre qu'un simple mot de passe car elle repose sur deux formes d'authentification:</p><ul><li>Quelque chose que tu connais, comme ton mot de passe.</li><li>Quelque chose que vous avez, comme un téléphone ou un autre appareil que vous transportez.</li></ul><p>La vérification à deux facteurs peut aider à empêcher les pirates malveillants de prétendre être vous. Même s'ils ont votre mot de passe, il est improbable qu'ils aient aussi votre appareil.</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "Pour renforcer la sécurité, l'authentification multifactorielle (MFA) de myMSC ne prendra bientôt plus en charge les méthodes par SMS et par appel téléphonique. L'utilisation de la méthode de l'application Authenticator est suggérée pour une vérification plus sécurisée. Pour des instructions détaillées, veuillez consulter le <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>Guide de l'utilisateur.</a>"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "NOTE IMPORTANTE : Il est fortement recommandé de toujours s'inscrire avec une adresse e-mail associée à une personne physique. Cependant, si votre compte est basé sur une boîte aux lettres partagée, sélectionnez l'option e-mail comme méthode MFA en raison du nombre limité d'appareils simultanés pris en charge par l'Authenticator. Veuillez noter que l'adresse e-mail utilisée pour l'inscription ne peut pas être modifiée."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "Toutes nos communications sont adaptées aux besoins de votre entreprise. Souhaitez-vous mettre à jour vos centres d'intérêt ? Cliquez <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>ici</a>, s'il vous plaît."
+      }
+    ]
+  },
+  {
+    "Language": "it",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "myMSC Login"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "Autenticazione a più Fattori"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "Reset Password"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "Cambia Password"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "Registrazione"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "Aggiorna il Profilo"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "Termini e Condizioni"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>Stiamo adottando ulteriori misure per assicurarci che tu sia chi dici di essere al momento dell'accesso.<br />Questa ulteriore verifica di sicurezza è nota anche come verifica a due fattori. Consiste in una combinazione di nome utente, password e un dispositivo mobile o telefono.</p><p>La verifica a due fattori è più sicura di una semplice password perché si basa su due forme di autenticazione:</p><ul><li>Qualcosa che conosci, come la tua password.</li><li>Qualcosa che hai, come un telefono o un altro dispositivo che porti.</li></ul><p>La verifica a due fattori può aiutare a impedire agli hacker malintenzionati di fingere di essere te. Anche se hanno la tua password, è improbabile che abbiano anche il tuo dispositivo.</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "Per migliorare la sicurezza, l'autenticazione multifattoriale (MFA) di myMSC non supporterà più i metodi di telefono tramite SMS e telefono tramite chiamata. Si consiglia l'uso del metodo dell'app Authenticator per una verifica più sicura. Per istruzioni dettagliate, fare riferimento alla <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>Guida utente.</a>"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "NOTA IMPORTANTE: Si consiglia vivamente di registrarsi sempre con un'e-mail associata a una persona fisica. Tuttavia, se il tuo account si basa su una casella di posta condivisa, seleziona l'opzione e-mail come metodo MFA a causa del numero limitato di dispositivi simultanei supportati dall'Authenticator. Si noti che l'indirizzo e-mail utilizzato per la registrazione non può essere modificato."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "Tutte le nostre comunicazioni sono personalizzate per soddisfare le tue esigenze aziendali. Vuoi aggiornare il tuo interesse? Per favore clicca <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>qui</a>."
+      }
+    ]
+  },
+  {
+    "Language": "ja",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "myMSC ログイン"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "多要素認証"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "パスワードのリセット"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "パスワードの変更"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "登録"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "プロファイルの編集"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "利用規約"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>「サインイン時に本人であることを確認するために、追加の措置を講じています。<br />この追加のセキュリティ検証は、2要素検証とも呼ばれます。これは、ユーザー名、パスワード、およびモバイルデバイスまたは電話の組み合わせで構成されます。</p><p>2要素認証は、次の2つの認証形式に依存しているため、単なるパスワードよりも安全です。</p><ul><li>パスワードなど、知っていること。</li><li>携帯している電話やその他のデバイスなど、持っているもの。</li></ul><p>二要素認証は、悪意のあるハッカーがあなたになりすますのを防ぐのに役立ちます。 彼らがあなたのパスワードを持っていたとしても、彼らがあなたのデバイスも持っている可能性は低いです。」</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "セキュリティを強化するために、myMSC 多要素認証 (MFA) は、SMS による電話および通話による電話の方法をサポートしなくなります。より安全な検証のために Authenticator アプリ方法を使用することをお勧めします。詳細な手順については、<a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>ユーザー ガイド</a> を参照してください。"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "重要な注意: 常に物理的な人物に関連付けられたメールで登録することを強くお勧めします。ただし、アカウントが共有メールボックスに基づいている場合は、Authenticator がサポートする同時デバイスの数が限られているため、MFA メソッドとしてメール オプションを選択してください。登録に使用されたメール アドレスは変更できないことに注意してください。"
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "すべてのコミュニケーションは、お客様のビジネスニーズに合わせて調整されます。関心事項を更新したいとお考えですか？<a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>こちらをクリックしてください</a>。"
+      }
+    ]
+  },
+  {
+    "Language": "ko",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "MyMSC 로그인"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "다단계 인증"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "암호 재설정"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "암호 변경"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "등록"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "프로필 편집"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "이용 약관"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>로그인 할 때 본인이 맞는지 확인하기 위해 추가 조치를 취하고 있습니다.<br />이 추가 보안 확인을 2 단계 확인이라고도합니다.사용자 이름, 암호 및 모바일 장치 또는 전화의 조합으로 구성됩니다.</p><p>이중 인증은 두 가지 인증 형식에 의존하기 때문에 단순한 암호보다 더 안전합니다.</p><ul><li>비밀번호와 같이 알고있는 것.</li><li>휴대 전화 나 기타 휴대 기기 등 가지고있는 것.</li></ul><p>2 단계 인증은 악의적 인 해커가 귀하를 가장하는 것을 방지하는 데 도움이됩니다. 그들이 귀하의 비밀번호를 알고 있어도 귀하의 기기도 가지고있을 가능성이 없습니다.</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "보안을 강화하기 위해 myMSC 다단계 인증(MFA)은 SMS 및 전화 통화 방법을 더 이상 지원하지 않습니다. 더 안전한 인증을 위해 Authenticator 앱 방법을 사용하는 것이 좋습니다. 자세한 지침은 <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>사용자 가이드</a>를 참조하십시오."
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "중요 참고 사항: 항상 실제 사람과 연결된 이메일로 등록하는 것이 좋습니다. 그러나 계정이 공유 메일함을 기반으로 하는 경우 Authenticator에서 지원하는 동시 장치 수가 제한되어 있으므로 MFA 방법으로 이메일 옵션을 선택하십시오. 등록에 사용된 이메일 주소는 변경할 수 없습니다."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "모든 커뮤니케이션은 비즈니스 요구 사항에 맞게 조정됩니다.관심 분야를 업데이트하고 싶으신가요? <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>여기를 클릭해 주세요</a>."
+      }
+    ]
+  },
+  {
+    "Language": "pt",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "myMSC Login"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "Autenticação Multifactor"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "Redefinir senha"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "Alterar senha"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "Registro"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "Editar perfil"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "Termos e Condições"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>Estamos tomando medidas extras para garantir que você seja quem diz ser ao fazer login.<br />Essa verificação de segurança extra também é conhecida como verificação de dois fatores. Consiste em uma combinação de seu nome de usuário, senha e um dispositivo móvel ou telefone.</p><p>A verificação de dois fatores é mais segura do que apenas uma senha porque se baseia em duas formas de autenticação:</p><ul><li>Algo que você conhece, como sua senha.</li><li>Algo que você tem, como um telefone ou outro dispositivo que você carrega.</li></ul><p>A verificação de dois fatores pode ajudar a impedir que hackers maliciosos finjam ser você. Mesmo que eles tenham sua senha, é improvável que eles também tenham o seu dispositivo.</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "Para melhorar a segurança, a autenticação multifator (MFA) do myMSC em breve não oferecerá suporte aos métodos de telefone por SMS e telefone por chamada. O uso do método do aplicativo Authenticator é sugerido para verificação mais segura. Para instruções detalhadas, consulte o <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>Guia do usuário.</a>"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "NOTA IMPORTANTE: É altamente recomendável registrar-se sempre com um e-mail associado a uma pessoa física. No entanto, se sua conta for baseada em uma caixa de correio compartilhada, selecione a opção de e-mail como método MFA devido ao número limitado de dispositivos simultâneos suportados pelo Authenticator. Observe que o endereço de e-mail usado para registro não pode ser alterado."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "Todas as nossas comunicações são adaptadas às suas necessidades de negócio. Gostaria de atualizar o seu interesse? Por favor clique <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>aqui</a>."
+      }
+    ]
+  },
+  {
+    "Language": "ru",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "Вход в систему MyMSC"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "Многофакторная аутентификация"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "Сброс пароля"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "Изменение пароля"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "Зарегистрировать"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "Редактировать профиль"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "Условия и условия"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>Мы предпринимаем дополнительные меры, чтобы убедиться, что вы являетесь тем, кем вы себя называете при входе в систему<br />Эта дополнительная проверка безопасности также известна как двухфакторная проверка. Он состоит из комбинации вашего имени пользователя, пароля и мобильного устройства или телефона.</p><p>Двухфакторная проверка более безопасна, чем просто пароль, поскольку основана на двух формах проверки подлинности:</p><ul><li>Что-то вы знаете, например, ваш пароль.</li><li>Что-то, что у вас есть, например телефон или другое устройство, которое вы носите с собой.</li></ul><p>Двухфакторная проверка может помочь злоумышленникам перестать притворяться вами. Даже если у них есть ваш пароль, маловероятно, что у них тоже есть ваше устройство</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "Для повышения безопасности многофакторная аутентификация (MFA) myMSC вскоре перестанет поддерживать методы телефона через SMS и телефон через звонок. Для более безопасной проверки предлагается использовать метод приложения Authenticator. Для получения подробных инструкций, пожалуйста, обратитесь к <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>Руководству пользователя.</a>"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "ВАЖНОЕ ЗАМЕЧАНИЕ: Настоятельно рекомендуется всегда регистрироваться с электронной почтой, связанной с физическим лицом. Однако, если ваша учетная запись основана на общей почтовой ящике, выберите вариант электронной почты в качестве метода MFA из-за ограниченного количества одновременных устройств, поддерживаемых Authenticator. Обратите внимание, что адрес электронной почты, используемый для регистрации, не может быть изменен."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "Все наши коммуникации адаптированы к потребностям вашего бизнеса. Хотите обновить свой интерес? Пожалуйста, нажмите <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>здесь</a>."
+      }
+    ]
+  },
+  {
+    "Language": "tr",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "MyMSC Giriş"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "Çok Amaçlı Kimlik Doğrulaması"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "Parolayı sıfırla"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "Parolayı değiştirme"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "Kayıt yaptır"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "Profili Düzenle"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "Hüküm ve Koşullar"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>Oturum açtığınızda söylediğiniz kişi olduğunuzdan emin olmak için ek adımlar atıyoruz.<br />Bu ekstra güvenlik doğrulaması, iki faktörlü doğrulama olarak da bilinir. Kullanıcı adınız, şifreniz ve bir mobil cihaz veya telefonun birleşiminden oluşur.</p><p>İki faktörlü doğrulama bir paroladan daha güvenlidir çünkü iki kimlik doğrulama biçimine dayanır:</p><ul><li>Şifreniz gibi bildiğiniz bir şey.</li><li>Sahip olduğunuz bir şey, örneğin bir telefon veya taşıdığınız başka bir cihaz.</li></ul><p>İki faktörlü doğrulama, kötü niyetli bilgisayar korsanlarının sizmişsiniz gibi davranmasını önlemeye yardımcı olabilir. Parolanız ellerinde olsa bile, cihazınızın ellerinde olması olası değildir.</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "Güvenliği artırmak için myMSC Çok Amaçlı Kimlik Doğrulama (MFA) yakında SMS ve telefonla arama yöntemlerini desteklemeyecektir. Daha güvenli doğrulama için Authenticator Uygulaması yönteminin kullanılması önerilir. Ayrıntılı talimatlar için lütfen <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>Kullanıcı Kılavuzuna</a> bakın."
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "ÖNEMLİ NOT: Her zaman fiziksel bir kişiyle ilişkilendirilmiş bir e-posta ile kayıt yaptırmanız şiddetle tavsiye edilir. Ancak, hesabınız paylaşılan bir posta kutusuna dayanıyorsa, Authenticator tarafından desteklenen sınırlı sayıda eşzamanlı cihaz nedeniyle MFA yöntemi olarak e-posta seçeneğini seçin. Kayıt için kullanılan e-posta adresinin değiştirilemeyeceğini unutmayın."
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "Tüm iletişimlerimiz iş ihtiyaçlarınıza uyacak şekilde uyarlanmıştır. İlginizi güncellemek ister misiniz? Lütfen <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>buraya tıklayınız</a>."
+      }
+    ]
+  },
+  {
+    "Language": "zh",
+    "Text": [
+      {
+        "ElementId": "h2TitleLogin",
+        "Value": "myMSC 登录"
+      },
+      {
+        "ElementId": "h2TitleMFA",
+        "Value": "多因素认证"
+      },
+      {
+        "ElementId": "h2TitleResetPassword",
+        "Value": "重置密码"
+      },
+      {
+        "ElementId": "h2TitleChangePassword",
+        "Value": "更改密码"
+      },
+      {
+        "ElementId": "h2TitleRegistration",
+        "Value": "注册"
+      },
+      {
+        "ElementId": "h2TitleEditProfile",
+        "Value": "编辑配置文件"
+      },
+      {
+        "ElementId": "footerText",
+        "Value": "© ##REPLACEYEAR## MSC Mediterranean Shipping Company S.A. All Rights Reserved"
+      },
+      {
+        "ElementId": "h2TitleTeC",
+        "Value": "条款和条件"
+      },
+      {
+        "ElementId": "textPopupMFA",
+        "Value": " <p>我们正在采取额外措施来确保您在登录时说的是您的身份。<br />这种额外的安全性验证也称为两因素验证。 它由您的用户名，密码和移动设备或电话组成。</p><p>两因素验证比仅密码更安全，因为它依赖两种形式的身份验证：</p><ul><li>您知道的一些信息，例如您的密码。</li><li>您拥有的东西，例如手机或其他携带的设备。</li></ul><p>两因素验证可以帮助阻止恶意黑客假装自己。 即使他们拥有您的密码，也不可能拥有您的设备。</p>"
+      },
+      {
+        "ElementId": "textTitleInfoMFA",
+        "Value": "为了提高安全性，myMSC 多因素认证 (MFA) 将不再支持通过短信和电话呼叫的方法。建议使用 Authenticator 应用程序方法进行更安全的验证。有关详细说明，请参阅 <a id='user-guide-link' href='##USERGUIDEURL##' target='_blank'>用户指南。</a>"
+      },
+      {
+        "ElementId": "textInfoMFA",
+        "Value": "重要说明：强烈建议始终使用与实际人员关联的电子邮件进行注册。但是，如果您的帐户基于共享邮箱，请选择电子邮件选项作为 MFA 方法，因为 Authenticator 支持的并发设备数量有限。请注意，用于注册的电子邮件地址无法更改。"
+      },
+      {
+        "ElementId": "preferenceCenterLink",
+        "Value": "我们所有的通信都是为满足您的业务需求量身定制的。你想更新你的兴趣吗？ <a id='preference-center-link' href='https://cloud.content.msc.com/yourpreferencecenter'>请点击这里</a>。"
+      }
+    ]
+  }
+]

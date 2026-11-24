@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: tracking-scraper-backend
+  jackson:
+    default-property-inclusion: non_null
+    time-zone: UTC
+
+server:
+  port: 8080
+  shutdown: graceful
+  error:
+    include-message: always
+
+tracking:
+  github:
+    owner: ${GITHUB_OWNER:renzo}
+    repo: ${GITHUB_REPO:scraper}
+    workflow-file: scraper.yml
+    ref: ${GITHUB_REF_NAME:main}
+    token: ${GITHUB_DISPATCH_TOKEN:}
+    api-base-url: https://api.github.com
+    timeout: 20s
+  scraper:
+    shared-secret: ${SCRAPER_SHARED_SECRET:}
+    max-batch: 40
+    carrier-whitelist:
+      - MSC
+      - MAERSK
+      - HAPAG_LLOYD
+    pending-max-age: 6h
+    recheck-interval: 20h
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+logging:
+  level:
+    pe.renzo.tracking: INFO
+    org.springframework.web.client: WARN

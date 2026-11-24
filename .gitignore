@@ -1,0 +1,27 @@
+# Ignorar artefactos de ejecución
+resultados.json
+resultados-e2e.json
+resultados-*.json
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+venv/
+
+# Java / Maven
+backend/target/
+*.class
+
+# Entornos con secretos
+.env
+.env.*
+!.env.example
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+.DS_Store

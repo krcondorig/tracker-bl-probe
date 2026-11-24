@@ -1,0 +1,133 @@
+{
+  "metadata": {
+    "last_updated": "2026-11-24T00:10:54.949Z",
+    "autoblocking_enabled": false
+  },
+  "cookies": [
+    {
+      "name": "_dd_s",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_necessary"
+    },
+    {
+      "name": "selectedLang",
+      "domain": "maersk.com",
+      "category": "cookie_cat_necessary"
+    },
+    {
+      "name": "pr_sec",
+      "domain": ".maersk.com",
+      "category": "cookie_cat_necessary"
+    },
+    {
+      "name": "akavpau_prod_book",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_necessary"
+    },
+    {
+      "name": "CookieInformationConsentError",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_necessary"
+    },
+    {
+      "name": "CookieInformationConsent",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_necessary"
+    },
+    {
+      "name": "country_code",
+      "domain": "maersk.com",
+      "category": "cookie_cat_necessary"
+    },
+    {
+      "name": "maersk#lang",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_necessary"
+    },
+    {
+      "name": "xxx#lang",
+      "domain": ".maersk.com",
+      "category": "cookie_cat_functional"
+    },
+    {
+      "name": "xxx#lang",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_functional"
+    },
+    {
+      "name": "ak_bmsc",
+      "domain": ".maersk.com",
+      "category": "cookie_cat_functional"
+    },
+    {
+      "name": "_ga_xxx",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_statistic"
+    },
+    {
+      "name": "_ga_xxx",
+      "domain": ".www.maersk.com",
+      "category": "cookie_cat_statistic"
+    },
+    {
+      "name": "kampyle_userid",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_marketing"
+    },
+    {
+      "name": "_gcl_au",
+      "domain": ".maersk.com",
+      "category": "cookie_cat_marketing"
+    },
+    {
+      "name": "kampyleSessionPageCounter",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_marketing"
+    },
+    {
+      "name": "_fbp",
+      "domain": ".maersk.com",
+      "category": "cookie_cat_marketing"
+    },
+    {
+      "name": "kampyleUserSession",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_marketing"
+    },
+    {
+      "name": "kampyleUserSessionsCount",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_marketing"
+    },
+    {
+      "name": "kampyleUserPercentile",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_marketing"
+    },
+    {
+      "name": "akaalb_nonapitrafficprod",
+      "domain": "www.maersk.com",
+      "category": "cookie_cat_unclassified"
+    },
+    {
+      "name": "_rdt_uuid",
+      "domain": ".maersk.com",
+      "category": "cookie_cat_unclassified"
+    },
+    {
+      "name": "akacd_IAM_PROD_AM",
+      "domain": "accounts.maersk.com",
+      "category": "cookie_cat_unclassified"
+    },
+    {
+      "name": "akacd_IAM_ACCOUNTS_PROD",
+      "domain": "accounts.maersk.com",
+      "category": "cookie_cat_unclassified"
+    },
+    {
+      "name": "euconsent-v2",
+      "domain": "maersk.com",
+      "category": "cookie_cat_necessary"
+    }
+  ]
+}
