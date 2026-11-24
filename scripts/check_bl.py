@@ -13,13 +13,18 @@ Estrategia por naviera (verificada contra los sitios):
     MSC     -> hay que rellenar el formulario #trackingNumber y pulsar Enter.
                Los deep links ?trackingNumber=/&trackingMode=1 NO disparan el XHR.
     Maersk  -> el deep link /tracking/{bl} sí dispara el XHR.
-    Hapag   -> ?blno={bl}. Sin WARP suele devolver challenge de Cloudflare.
+    Hapag   -> el listado vive en track-by-booking-solution-legacy.html
+               (?blno={bl}) y el detalle NO es una URL: es un POST de JSF
+               que dispara el botón "Details" tras marcar el radio de la
+               fila. La página de detalle es HTML con una tabla de
+               movimientos, no JSON. Sin WARP devuelve challenge.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import html as html_lib
 import json
 import re
 import sys
@@ -59,7 +64,7 @@ def classify(raw: str) -> tuple[str, str]:
 # Fechas
 # --------------------------------------------------------------------------- #
 _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
-                 "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+                 "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d")
 
 
 def parse_date(value: Any) -> datetime | None:
@@ -223,11 +228,141 @@ def extract_maersk(payload: dict, port: str) -> Report | None:
     return report
 
 
+def _hapag_events(text: str) -> list[dict[str, str]]:
+    """Lee la tabla de movimientos del detalle de Hapag.
+
+    La página no es JSON: es HTML con una tabla cuyas filas se ven así
+
+        Discharged\tMANZANILLO, COL (MX)\t2026-10-22\t20:38\tIQUIQUE EXPRESS\t2636E
+
+    Se parte por tabuladores porque en texto plano las celdas quedan separadas
+    así; `innerText` ya colapsa los espacios de relleno del contenedor, que en
+    esta tabla no hacen falta.
+    """
+    events: list[dict[str, str]] = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        if "\t" in line:
+            cells = [c.strip() for c in line.split("\t")]
+        else:
+            # Sin tabuladores: se exige que empiece por un estado conocido y
+            # se corta por la fecha, que es el ancla fiable de la fila.
+            head = next((st for st in HAPAG_STATES
+                         if line.strip().startswith(st)), None)
+            if not head:
+                continue
+            rest = line.strip()[len(head):].strip()
+            m = re.search(r"(\d{4}-\d{2}-\d{2})", rest)
+            if not m:
+                continue
+            cells = [head, rest[:m.start()].strip(), m.group(1)]
+            cells.append(rest[m.end():].strip())
+
+        status = cells[0].strip()
+        if status not in HAPAG_STATES:
+            continue
+        event = {
+            "status": status,
+            "place": cells[1] if len(cells) > 1 else "",
+            "date": cells[2] if len(cells) > 2 else "",
+            "time": cells[3] if len(cells) > 3 else "",
+            "transport": cells[4] if len(cells) > 4 else "",
+            "voyage": cells[5] if len(cells) > 5 else "",
+        }
+        when = parse_date(f"{event['date']} {event['time']}".strip())
+        event["when"] = when.isoformat() if when else ""
+        events.append(event)
+    return events
+
+
+def extract_hapag(text: str, containers: list[dict[str, str]], port: str) -> Report | None:
+    """Arma el reporte desde los detalles ya bajados de Hapag.
+
+    `containers` trae, por contenedor, su número y el texto del detalle. Si
+    ninguno tiene tabla de movimientos, se devuelve None: no se inventa un
+    resultado a partir de una página vacía.
+    """
+    parsed: list[ContainerReport] = []
+    matched_port = ""
+
+    for raw in containers:
+        number = raw.get("container") or "?"
+        events = _hapag_events(raw.get("text") or "")
+        if not events:
+            continue
+
+        item = ContainerReport(number=number)
+        item.eta_note = "Hapag no publica ETA de puerto en esta vista"
+
+        latest: datetime | None = None
+        arrivals: list[tuple[datetime, dict[str, str]]] = []
+        for event in events:
+            when = parse_date(event["when"]) if event["when"] else None
+            if when and (latest is None or when > latest):
+                latest = when
+                label = event["status"]
+                if event["place"]:
+                    label = f"{label} · {event['place']}"
+                item.last_event = label
+                item.last_event_at = when
+
+            if event["status"] in ("Discharged", "Vessel arrived") and when:
+                if _port_matches(event["place"], port):
+                    arrivals.append((when, event))
+
+        # Buque y viaje salen del evento oceánico que descargó en el puerto:
+        # es el tramo que interesa, no el primer buque del historial.
+        if arrivals:
+            arrival_date, discharge = min(arrivals, key=lambda pair: pair[0])
+            # `Discharged` es el hito real de llegada; si solo hay `Vessel
+            # arrived`, se usa ese. Se prefiere el de descarga por precisión.
+            for when, event in arrivals:
+                if event["status"] == "Discharged":
+                    arrival_date, discharge = when, event
+                    break
+            item.arrived = True
+            item.arrival_date = arrival_date
+            if discharge.get("transport"):
+                item.vessel = discharge["transport"]
+            item.voyage = discharge.get("voyage") or ""
+            if discharge.get("place") and not matched_port:
+                matched_port = discharge["place"]
+
+        parsed.append(item)
+
+    if not parsed:
+        return None
+
+    report = Report(reference="", carrier="HAPAG_LLOYD", ok=True)
+    report.port = matched_port or port
+    report.containers = parsed
+    return report
+
+
 # --------------------------------------------------------------------------- #
 # Navegación
 # --------------------------------------------------------------------------- #
 IGNORE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".woff",
               ".woff2", ".ttf", ".otf", ".css", ".map", ".mp4", ".webm")
+
+# Hapag-Lloyd: el listado y el detalle son páginas distintas de la app legacy.
+HAPAG_TRACK = "https://www.hapag-lloyd.com/en/online-business/track/"
+HAPAG_LISTING = HAPAG_TRACK + "track-by-booking-solution-legacy.html"
+HAPAG_VIEW = "S8510"  # constante del enlace "Details"
+
+# Estados de la tabla de movimientos. Se listan completos porque el formulario
+# los emite con ese texto exacto en la primera columna.
+HAPAG_STATES = (
+    "Gate out empty", "Gate in empty", "Gate out full", "Gate in full",
+    "Arrival in", "Departure from", "Loaded", "Discharged",
+    "Vessel departed", "Vessel arrived",
+)
+_HAPAG_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CONTAINER_TOKEN = re.compile(r"\b([A-Z]{4})[\s+]{0,2}(\d{6})[\s+]{0,2}(\d)\b")
+# Transportes terrestres: si el evento de descarga los trae, no es un buque.
+_LAND_TRANSPORT = ("truck", "rail", "barge", "train", "vessel", "")
 
 
 async def _dismiss_consent(page) -> None:
@@ -441,6 +576,164 @@ async def _fill_msc_form(page, reference: str) -> None:
     await field.press("Enter")
 
 
+def _hapag_rows_from_html(page_html: str) -> list[dict[str, str]]:
+    """Saca las filas del listado desde el HTML servido.
+
+    Se parsea el HTML y no el DOM porque el número de contenedor viene relleno
+    con DOS espacios (`HLBU  2959982`) y el DOM los colapsa al leer texto. Esos
+    dos espacios son significativos: el submit los codifica como `++` y esa es
+    la forma exacta del parámetro (`container=HLBU++2959982`).
+    """
+    rows: list[dict[str, str]] = []
+    for tr in re.findall(r"<tr\b[^>]*>(.*?)</tr>", page_html or "", re.S | re.I):
+        if not re.search(r"type=[\"']radio[\"']", tr, re.I):
+            continue
+        cells = [html_lib.unescape(re.sub(r"<[^>]+>", "", c)).strip()
+                 for c in re.findall(r"<td\b[^>]*>(.*?)</td>", tr, re.S | re.I)]
+        number = ""
+        for cell in cells:
+            match = _CONTAINER_TOKEN.search(cell)
+            if match:
+                number = re.sub(r"[^A-Z0-9]", "", cell.upper())
+                break
+        if number:
+            rows.append({"container": number, "cells": " | ".join(cells)[:120]})
+    return rows
+
+
+async def _hapag_wrong_page(page) -> bool:
+    """La SPA nueva y la app legacy comparten URL; se distinguen por el título."""
+    try:
+        title = (await page.title()) or ""
+    except Exception:
+        return False
+    return "tracking | hapag" in title.lower()
+
+
+async def query_hapag(browser, reference: str, port: str, wait_ms: int) -> Report:
+    """Listado del B/L + detalle de cada contenedor, como un humano.
+
+    Por qué no basta con armar la URL del detalle: el botón `Details` es
+    `type="button"` y lo maneja JS de la app legacy (ExtJS), que envía un POST
+    JSF con el `javax.faces.ViewState` de la sesión. Componer
+    `?view=S8510&container=...` a mano devuelve la shell de la SPA nueva, no
+    el detalle. Por eso se marca el radio y se pulsa el botón de verdad.
+    """
+    report = Report(reference=reference, carrier="HAPAG_LLOYD")
+    page = await browser.new_page()
+    page.set_default_timeout(60_000)
+
+    try:
+        await _show_banner(page)
+        listing_url = f"{HAPAG_LISTING}?blno={reference}"
+        await page.goto(listing_url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+        await _dismiss_consent(page)
+
+        reason = await _check_blocked(page)
+        if reason:
+            report.blocked = True
+            report.message = f"BLOQUEADO: {reason}"
+            return report
+
+        # El listado lo pinta ExtJS: se espera a que haya radios de selección.
+        rows: list[dict[str, str]] = []
+        for _ in range(max(wait_ms // 1000, 5)):
+            rows = _hapag_rows_from_html(await page.content())
+            if rows:
+                break
+            await page.wait_for_timeout(1000)
+
+        if not rows:
+            reason = await _check_blocked(page)
+            if reason:
+                report.blocked = True
+                report.message = f"BLOQUEADO: {reason}"
+            else:
+                report.message = ("El listado no trajo contenedores. "
+                                  "Revisa con --headed.")
+            return report
+
+        limit = min(len(rows), 12)
+        details: list[dict[str, str]] = []
+        for index in range(limit):
+            row = rows[index]
+            # Volver al listado en cada vuelta: tras el detalle, la URL sigue
+            # conteniendo el nombre legacy, así que no sirve comprobar la URL.
+            await page.goto(listing_url, wait_until="domcontentloaded")
+            await page.wait_for_timeout(2500)
+            await _dismiss_consent(page)
+
+            picked = await page.evaluate(
+                """(idx) => {
+                    const radios = Array.from(document.querySelectorAll(
+                        'input[type=radio][name]'));
+                    const r = radios[idx];
+                    if (!r) return null;
+                    r.click();
+                    const label = document.querySelector(`label[for="${r.id}"]`);
+                    if (label) label.click();
+                    return {id: r.id, checked: r.checked, total: radios.length};
+                }""",
+                index,
+            )
+            if not picked:
+                continue
+
+            try:
+                async with page.expect_navigation(timeout=45_000):
+                    await page.evaluate(
+                        """() => {
+                            const b = document.querySelector(
+                                'button[value="Details"]');
+                            if (b) { b.click(); return true; }
+                            return false;
+                        }"""
+                    )
+            except Exception:
+                await page.wait_for_timeout(6000)
+
+            await page.wait_for_timeout(3500)
+            reason = await _check_blocked(page)
+            if reason:
+                report.blocked = True
+                report.message = f"BLOQUEADO: {reason}"
+                return report
+            if await _hapag_wrong_page(page):
+                # El submit cayó en la SPA nueva: no es un detalle utilizable.
+                continue
+
+            text = await page.evaluate(
+                "() => document.body ? document.body.innerText : ''")
+            details.append({"container": row["container"], "text": text})
+
+        parsed = extract_hapag("", details, port)
+        if parsed is None:
+            report.message = "Se abrió el detalle pero no tenía tabla de movimientos"
+            return report
+
+        parsed.reference = reference
+        parsed.source_url = page.url
+        # Solo se guarda lo abierto, con el texto recortado: el dump completo de
+        # cada contenedor pesa cientos de KB y no aporta para diagnosticar.
+        parsed.raw = {
+            "listado": rows,
+            "detalles": [{"container": d["container"],
+                          "texto": (d["text"] or "")[:6000]}
+                         for d in details],
+        }
+        return parsed
+
+    except Exception as exc:
+        report.message = f"{type(exc).__name__}: {str(exc)[:160]}"
+        return report
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
+
+
 async def query(browser, reference: str, carrier: str, port: str,
                 wait_ms: int, headed_note: str) -> Report:
     report = Report(reference=reference, carrier=carrier)
@@ -463,11 +756,10 @@ async def query(browser, reference: str, carrier: str, port: str,
                             wait_until="domcontentloaded")
             await _dismiss_consent(page)
         elif carrier == "HAPAG_LLOYD":
-            await page.goto(
-                "https://www.hapag-lloyd.com/en/online-business/track/"
-                f"track-by-booking-solution.html?blno={reference}",
-                wait_until="domcontentloaded")
-            await _dismiss_consent(page)
+            # Ruta propia: no es una sola página con JSON, sino listado + un
+            # detalle por contenedor. Se delega antes de montar el Collector.
+            await page.close()
+            return await query_hapag(browser, reference, port, wait_ms)
         else:
             report.message = "Prefijo de B/L no reconocido"
             return report
