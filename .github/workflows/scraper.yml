@@ -94,6 +94,16 @@ jobs:
       # Sin esto, la IP del runner (Azure) está en listas negativas de Akamai
       # y de Cloudflare y el primer GET recibe un 403/challenge.
       # ------------------------------------------------------------------ #
+      - name: Cache WARP .deb packages
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.use_warp != 'false' }}
+        uses: actions/cache@v4
+        with:
+          # Medido: de ~880s de instalación, ~820s son descargar los 130 .deb
+          # que arrastran las dependencias de WARP; `dpkg` solo tarda ~59s.
+          # Con el cache en disco, la instalación baja a ~18s.
+          path: ~/.warp-debs
+          key: warp-debs-${{ runner.os }}-v1
+
       - name: Install Cloudflare WARP
         if: ${{ github.event_name == 'schedule' || github.event.inputs.use_warp != 'false' }}
         run: |
@@ -106,14 +116,33 @@ jobs:
           # Update completo: la dependencia libtss2-tctildr0t64 está en el
           # pocket `security`, que un update parcial no refresca.
           sudo apt-get update -qq
-          if ! sudo apt-get install -y -qq cloudflare-warp; then
+
+          # Si el cache trae los .deb, se instalan desde disco: ni red ni espera.
+          CACHE_DEBS="$HOME/.warp-debs"
+          mkdir -p "$CACHE_DEBS"
+          if compgen -G "$CACHE_DEBS/*.deb" > /dev/null; then
+            echo "Instalando $(ls -1 "$CACHE_DEBS"/*.deb | wc -l) .deb desde el cache"
+            sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 \
+              $(ls -1 "$CACHE_DEBS"/*.deb) || true
+          fi
+
+          if ! sudo apt-get install -y -qq --no-install-recommends \
+               -o Acquire::Retries=3 cloudflare-warp; then
             echo "::warning::cloudflare-warp no instaló a la primera; se inspecciona la dependencia."
             apt-cache policy libtss2-tctildr0t64 || true
-            sudo apt-get install -y -qq libtss2-tctildr0t64 \
-              || sudo apt-get install -y -qq libtss2-tctildr0 \
+            sudo apt-get install -y -qq --no-install-recommends libtss2-tctildr0t64 \
+              || sudo apt-get install -y -qq --no-install-recommends libtss2-tctildr0 \
               || true
-            sudo apt-get install -y -qq -f cloudflare-warp
+            sudo apt-get install -y -qq --no-install-recommends -f cloudflare-warp
           fi
+
+          # Guardar los .deb para la próxima ejecución y así no volver a
+          # descargar 123 MB en cada corrida.
+          if compgen -G "/var/cache/apt/archives/*.deb" > /dev/null; then
+            cp -n /var/cache/apt/archives/*.deb "$CACHE_DEBS/" 2>/dev/null || true
+            echo "(.deb en cache: $(ls -1 "$CACHE_DEBS"/*.deb | wc -l), $(du -sh "$CACHE_DEBS" | cut -f1))"
+          fi
+
           warp-cli --version
 
       - name: Connect WARP through SOCKS5 proxy
