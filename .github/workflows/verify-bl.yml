@@ -139,8 +139,11 @@ jobs:
           mkdir -p "$CACHE_DEBS"
           if compgen -G "$CACHE_DEBS/*.deb" > /dev/null; then
             echo "Instalando $(ls -1 "$CACHE_DEBS"/*.deb | wc -l) .deb desde el cache"
-            sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 \
-              $(ls -1 "$CACHE_DEBS"/*.deb) && mark "install desde cache" || true
+            # dpkg es puramente local; `apt-get install <rutas .deb>` resuelve
+            # dependencias contra los indices y puede salir a la red.
+            sudo dpkg -i "$CACHE_DEBS"/*.deb >/dev/null 2>&1 \
+              || sudo apt-get install -y -qq --no-install-recommends -f || true
+            mark "install desde cache"
           fi
           # Update completo: libtss2-tctildr0t64 vive en el pocket `security` y
           # un update restringido al repo de WARP lo deja sin candidato.

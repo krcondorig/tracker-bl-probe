@@ -76,7 +76,10 @@ jobs:
         run: |
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
+          t0=$(date +%s)
+          mark() { echo "[tiempo] $1: $(( $(date +%s) - t0 ))s"; }
           sudo apt-get update -qq
+          mark "apt-get update"
           sudo apt-get install -y -qq --no-install-recommends \
             xvfb dbus-x11 libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 \
             libxtst6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
@@ -87,6 +90,7 @@ jobs:
             libxtst6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
             libgbm1 libpango-1.0-0 libcairo2 libatk1.0-0 libatk-bridge2.0-0 \
             libasound2 libnss3 libnspr4 fonts-liberation
+          mark "apt-get install"
           echo "xvfb: $(xvfb-run --help >/dev/null 2>&1 && echo ok || echo missing)"
 
       # ------------------------------------------------------------------ #
@@ -122,8 +126,11 @@ jobs:
           mkdir -p "$CACHE_DEBS"
           if compgen -G "$CACHE_DEBS/*.deb" > /dev/null; then
             echo "Instalando $(ls -1 "$CACHE_DEBS"/*.deb | wc -l) .deb desde el cache"
-            sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 \
-              $(ls -1 "$CACHE_DEBS"/*.deb) || true
+            # dpkg es puramente local. `apt-get install <rutas .deb>` seguia
+            # tardando ~250s en el workflow de produccion porque resuelve
+            # dependencias contra los indices; dpkg no consulta nada.
+            sudo dpkg -i "$CACHE_DEBS"/*.deb >/dev/null 2>&1 \
+              || sudo apt-get install -y -qq --no-install-recommends -f || true
           fi
 
           if ! sudo apt-get install -y -qq --no-install-recommends \
