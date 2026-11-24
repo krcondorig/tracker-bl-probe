@@ -89,8 +89,8 @@ jobs:
       - name: Sondar listado
         run: |
           set -o pipefail
-          python scripts/probe_hapag_session.py socks5://127.0.0.1:40000 \
-            2>&1 | tee probe-session.log || true
+          python scripts/probe_hapag_form.py socks5://127.0.0.1:40000 \
+            2>&1 | tee probe-form.log || true
 
       - name: Resumen
         if: always()
@@ -98,7 +98,7 @@ jobs:
           {
             echo "## Sonda Hapag"
             echo '```'
-            sed -n '/RESUMEN/,$p' probe-session.log || echo "(sin resumen)"
+            sed -n '/RESUMEN/,$p' probe-form.log || echo "(sin resumen)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -107,6 +107,6 @@ jobs:
         with:
           name: hapag-probe
           path: |
-            probe-session.log
-            hapag-session-probe.json
+            probe-form.log
+            hapag-form-probe.json
           if-no-files-found: ignore
