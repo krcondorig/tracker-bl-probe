@@ -48,6 +48,6 @@ conocida y no deducirla del prefijo.
 
 ## Verificación
 
-- `python -m unittest discover -s tests` — 102 tests, verde
+- `python -m unittest discover -s tests` — 101 tests, verde
 - `mvn -B -ntp verify` — 25 tests, verde
 - `verify-bl.yml` verde en GitHub

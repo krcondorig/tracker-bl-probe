@@ -32,7 +32,6 @@ from tracker.config import load_settings
 from tracker.hapag import (
     CONTAINER_PAGE,
     HAPAG_STATES,
-    container_page,
     container_param,
     detail_url,
     is_real_detail,
@@ -748,11 +747,6 @@ class HapagDetailUrlTests(unittest.TestCase):
         self.assertEqual(padded_container("HLBU  2959982"), "HLBU  2959982")
         # Un número inválido se deja tal cual en vez de inventar relleno.
         self.assertEqual(padded_container("XYZ"), "XYZ")
-
-    def test_container_page_is_the_detail_entry_point(self):
-        # La pagina de contenedor es la entrada: abrirla con el parametro ya
-        # devuelve el detalle, sin radios ni boton `Details`.
-        self.assertEqual(container_page(), CONTAINER_PAGE)
 
     def test_detail_page_is_recognised_as_real(self):
         """El detalle se reconoce por sus estados, no por el largo del texto.

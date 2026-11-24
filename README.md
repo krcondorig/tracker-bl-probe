@@ -141,7 +141,7 @@ python scraper.py
 Pruebas:
 
 ```bash
-python -m unittest discover -s tests -v   # 102 tests, sin navegador
+python -m unittest discover -s tests -v   # 101 tests, sin navegador
 python scripts/e2e_intercept.py           # Camoufox real contra servidor local
 python scripts/e2e_full_flow.py           # flujo completo con backend falso
 cd backend && mvn verify                  # 25 tests de Spring Boot

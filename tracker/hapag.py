@@ -72,17 +72,6 @@ def padded_container(raw: str) -> str:
     return f"{number[:4]}  {number[4:]}"
 
 
-def container_page() -> str:
-    """Página de entrada del detalle por contenedor.
-
-    Abrirla con `?view=S8510&container=...` ya devuelve el detalle: medido en el
-    runner con dos contenedores del mismo B/L, cada uno trae su propia tabla
-    (`2026-08-22 14:30` frente a `2026-08-14 06:44`). No hace falta formulario
-    ni pulsar `Find`.
-    """
-    return CONTAINER_PAGE
-
-
 def detail_url(container: str) -> str:
     """URL navegable del detalle de un contenedor.
 
