@@ -129,6 +129,15 @@ async def _containers_from_page(page, html: str, text: str) -> list[dict[str, st
 
     # 1) filas del formulario JSF (la fuente buena: trae radio + datos)
     rows = await _rows_from_page(page)
+    source_kind = "dom"
+    if not rows:
+        # El DOM colapsa los espacios del contenedor, así que si no hay filas
+        # se lee el HTML servido, donde `HLBU  2959982` conserva sus dos
+        # espacios y el parámetro sale `HLBU++2959982` como en el sitio.
+        rows = _rows_from_html(html)
+        source_kind = "html"
+    if rows:
+        print(f"     (filas leídas del {source_kind})")
     for idx, row in enumerate(rows):
         cells = row.get("cells") or []
         cont = ""
@@ -241,7 +250,7 @@ async def _rows_from_page(page) -> list[dict[str, Any]]:
     """
     try:
         rows = await page.evaluate(
-            """() => {
+            r"""() => {
                 const out = [];
                 const radios = Array.from(document.querySelectorAll(
                     'input[type=radio][name]'));
@@ -272,7 +281,8 @@ async def _rows_from_page(page) -> list[dict[str, Any]]:
             }"""
         )
         return rows or []
-    except Exception:
+    except Exception as exc:
+        print(f"     (_rows_from_page falló: {type(exc).__name__}: {str(exc)[:90]})")
         return []
 
 
@@ -285,6 +295,50 @@ def _container_param(raw: str) -> str:
     formulario. No se usa `quote()` porque este escaparía el `+` a `%2B`.
     """
     return raw.replace(" ", "+")
+
+
+def _rows_from_html(html: str) -> list[dict[str, Any]]:
+    """Saca las filas del listado directamente del HTML servido.
+
+    Es la fuente más fiable: el servidor emite
+    `<span class="nonEditableContent">HLBU  2959982</span>` con los DOS
+    espacios intactos. El `innerText` del DOM los colapsa a uno, y entonces el
+    parámetro sale `HLBU+2959982` en vez de `HLBU++2959982`.
+
+    También se lee el radio, que es lo que identifica la fila en el formulario
+    JSF, y se entrega ya en el orden en que aparece el listado.
+    """
+    rows: list[dict[str, Any]] = []
+    if not html:
+        return rows
+    # Cada fila: un radio con su id, y su <tr> con las celdas.
+    for tr_match in re.finditer(r"<tr\b[^>]*>(.*?)</tr>", html, re.S | re.I):
+        tr = tr_match.group(1)
+        radio = re.search(r'<input[^>]*type=["\']radio["\'][^>]*>', tr, re.I)
+        if not radio:
+            continue
+        tag = radio.group(0)
+        rid = re.search(r'id=["\']([^"\']+)["\']', tag)
+        rname = re.search(r'name=["\']([^"\']+)["\']', tag)
+        cells = [
+            re.sub(r"<[^>]+>", "", c).strip()
+            for c in re.findall(r"<td\b[^>]*>(.*?)</td>", tr, re.S | re.I)
+        ]
+        # El contenedor conserva los espacios del servidor: no se re-une nada.
+        raw_container = ""
+        for cell_html in re.findall(r"<td\b[^>]*>(.*?)</td>", tr, re.S | re.I):
+            plain = re.sub(r"<[^>]+>", "", cell_html)
+            if CONTAINER_RE.search(plain):
+                raw_container = plain.replace("\r", " ").replace("\n", " ")
+                raw_container = raw_container.strip()
+                break
+        rows.append({
+            "radioId": rid.group(1) if rid else "",
+            "radioName": rname.group(1) if rname else "",
+            "cells": cells,
+            "rawContainer": raw_container,
+        })
+    return rows
 
 
 async def _container_in_row(cells: list[str]) -> str:
