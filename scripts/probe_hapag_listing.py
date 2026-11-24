@@ -18,19 +18,28 @@ CONTAINER = "HLBU2959982"
 BL = "HLCUNG12607EKZE0"
 
 # Combinaciones a probar: página legacy + forma del parámetro.
+#
+# El log real de check_bl mostró que tras pulsar `Details` la URL quedaba como
+# `track-by-booking-solution-legacy.html?view=S8510&container=HLXU++1013982`.
+# Si esa URL se puede abrir directamente, Hapag no necesita B/L.
 CASES = [
     ("booking_legacy+blno", TRACK + "track-by-booking-solution-legacy.html", f"blno={BL}"),
-    ("booking_legacy+container", TRACK + "track-by-booking-solution-legacy.html",
-     f"container={CONTAINER}"),
-    ("booking_legacy+container+pad", TRACK + "track-by-booking-solution-legacy.html",
-     f"container={CONTAINER[:4]}++{CONTAINER[4:]}"),
-    ("container_legacy+container", TRACK + "track-by-container-solution-legacy.html",
-     f"container={CONTAINER}"),
+    ("booking_legacy+view+container_pad", TRACK + "track-by-booking-solution-legacy.html",
+     f"view=S8510&container={CONTAINER[:4]}++{CONTAINER[4:]}"),
+    ("booking_legacy+view+container", TRACK + "track-by-booking-solution-legacy.html",
+     f"view=S8510&container={CONTAINER}"),
+    ("container_legacy+view+container_pad", TRACK + "track-by-container-solution-legacy.html",
+     f"view=S8510&container={CONTAINER[:4]}++{CONTAINER[4:]}"),
+    ("container_legacy+view+container", TRACK + "track-by-container-solution-legacy.html",
+     f"view=S8510&container={CONTAINER}"),
     ("container_legacy+container+pad", TRACK + "track-by-container-solution-legacy.html",
      f"container={CONTAINER[:4]}++{CONTAINER[4:]}"),
 ]
 
 RADIO = "type=\"radio\""
+# Estados de la tabla de movimientos: su presencia distingue un detalle real de
+# la shell de la SPA, que también responde 200.
+MOVEMENT_STATES = ("Discharged", "Vessel arrived", "Gate out full", "Loaded")
 
 
 async def inspect(page, url: str) -> dict:
@@ -61,6 +70,8 @@ async def inspect(page, url: str) -> dict:
     info["rows"] = len([1 for chunk in html.split("<tr") if RADIO in chunk])
     # Primeros indicios de si el número aparece con espacios de relleno.
     info["has_padded_number"] = "HLBU  2959982" in html
+    # ¿Es un detalle con tabla de movimientos, o solo la shell de la SPA?
+    info["movement_states"] = sum(1 for state in MOVEMENT_STATES if state in html)
     return info
 
 
@@ -80,7 +91,8 @@ async def main() -> int:
             info["case"] = name
             results.append(info)
             print(f"   radio={info.get('has_radio')} rows={info.get('rows')} "
-                  f"blocked={info.get('looks_blocked')} bytes={info.get('bytes')}",
+                  f"blocked={info.get('looks_blocked')} movs={info.get('movement_states')} "
+                  f"bytes={info.get('bytes')}",
                   flush=True)
         await page.close()
 
@@ -89,8 +101,9 @@ async def main() -> int:
 
     print("\nRESUMEN")
     for info in results:
-        print(f"  {info['case']:<30} radio={info.get('has_radio')} "
-              f"rows={info.get('rows')} padded={info.get('has_padded_number')}")
+        print(f"  {info['case']:<36} radio={info.get('has_radio')} "
+              f"rows={info.get('rows')} padded={info.get('has_padded_number')} "
+              f"movs={info.get('movement_states')}")
     return 0
 
 
