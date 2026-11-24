@@ -32,7 +32,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Cache Camoufox
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            camoufox-${{ runner.os }}-
+
       - name: Asegurar binario de Camoufox
+        env:
+          # Sin token, `camoufox fetch` choca con el rate limit de
+          # api.github.com, que los runners comparten por IP.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/ensure_camoufox.py
 
       - name: Consultar B/L
@@ -79,7 +91,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Cache Camoufox
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            camoufox-${{ runner.os }}-
+
       - name: Asegurar binario de Camoufox
+        env:
+          # Sin token, `camoufox fetch` choca con el rate limit de
+          # api.github.com, que los runners comparten por IP.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/ensure_camoufox.py
 
       - name: Instalar Cloudflare WARP

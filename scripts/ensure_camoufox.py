@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 
 def installed() -> dict[str, str] | None:
@@ -66,16 +67,30 @@ def main() -> int:
         return 1
 
     print("Camoufox no está instalado; ejecutando `camoufox fetch`.")
-    try:
-        from camoufox.pkgman import CamoufoxFetcher
+    # El rate limit de api.github.com es intermitente (los runners comparten
+    # IP), así que un solo intento convierte un fallo pasajero en un job rojo.
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            from camoufox.pkgman import CamoufoxFetcher
 
-        CamoufoxFetcher().install()
-    except Exception as exc:
-        print(f"ERROR al descargar Camoufox: {type(exc).__name__}: {exc}",
-              file=sys.stderr)
-        print("Si es un 403 de rate limit, exporta GITHUB_TOKEN para "
-              "autenticar la llamada a api.github.com.", file=sys.stderr)
-        return 1
+            CamoufoxFetcher().install()
+            break
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            rate_limited = "rate limit" in detail.lower()
+            print(f"Intento {attempt}/{attempts} falló: {detail}",
+                  file=sys.stderr)
+            if attempt == attempts:
+                print("Si es un 403 de rate limit, exporta GITHUB_TOKEN para "
+                      "autenticar la llamada a api.github.com.", file=sys.stderr)
+                return 1
+            if not rate_limited:
+                # Un error que no es de rate limit no mejora reintentando.
+                return 1
+            wait = 20 * attempt
+            print(f"Reintentando en {wait}s...", file=sys.stderr)
+            time.sleep(wait)
 
     found = installed()
     if not found:
