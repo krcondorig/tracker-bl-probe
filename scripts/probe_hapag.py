@@ -1,24 +1,23 @@
-"""Sonda de Hapag-Lloyd: reproduce el flujo real del detalle por contenedor.
+"""Sonda de Hapag-Lloyd: reproduce el flujo real (listado -> detalle).
 
-Cómo se llegó aquí (no repetir):
+Camino recorrido hasta aquí (para no repetir el trabajo):
 
-1. Sin WARP, `hapag-lloyd.com` devuelve Managed Challenge: es bloqueo por IP.
-2. Con WARP la web carga, pero `?blno=` y el formulario no disparan el JSON de
-   tracking: la SPA usa rutas hash y llama a una API aparte.
-3. Esa API (`tracking.api.hlag.cloud/api/tracking/v3/events`) falla con
-   "NetworkError" desde `fetch`: CORS.
-4. La vía que sí usa la web es **HTML renderizado en servidor**:
+1. Sin WARP, `hapag-lloyd.com` devuelve Managed Challenge: bloqueo por IP,
+   no por fingerprint. Con WARP la web carga.
+2. La SPA nueva (`/solutions/tracking/#/`) NO sirve para esto: su API JSON
+   (`tracking.api.hlag.cloud/api/tracking/v3/events`) falla con NetworkError
+   por CORS desde el navegador, y las cuatro variantes de versión dan lo mismo.
+3. El flujo que sí existe es el de toda la vida, HTML renderizado en servidor:
 
-       track-by-booking-solution.html?view=S8510&container=<CONTENEDOR>
+       listing : track-by-booking-solution[-legacy].html?blno=<B/L>
+       detalle : track-by-booking-solution.html?view=S8510&container=<CONT>
 
-   `view=S8510` es una constante; `container` sale del listado que aparece al
-   consultar el B/L. Ese es el camino de este probe.
+   `view=S8510` es constante; el contenedor sale del listado. La forma del
+   parámetro en el sitio es `HLBU++2959982` (el `+` es espacio codificado),
+   así que aquí se prueba la forma normalizada y la cruda.
 
-Flujo:
-   A. Consultar el B/L y extraer el listado de contenedores (con sus enlaces
-      "Detalles", que ya traen el contenedor exacto).
-   B. Navegar a la URL de detalle de cada contenedor y volcar el HTML.
-   C. Resumir lo que se ve: buque, viaje, puerto, fechas, llegada.
+Este script prueba las dos vías de listado, extrae los contenedores del HTML
+y visita el detalle. Guarda todo crudo para no tener que repetir la corrida.
 
 Uso:
     python scripts/probe_hapag.py HLCUNG12607EKZE0 --proxy socks5://127.0.0.1:40000
@@ -40,20 +39,27 @@ sys.path.insert(0, str(ROOT))
 
 from camoufox.async_api import AsyncCamoufox  # noqa: E402
 
-BOOKING_URL = ("https://www.hapag-lloyd.com/en/online-business/track/"
-               "track-by-booking-solution.html")
+TRACK = "https://www.hapag-lloyd.com/en/online-business/track/"
+BOOKING = TRACK + "track-by-booking-solution.html"
+LEGACY = TRACK + "track-by-booking-solution-legacy.html"
+SPA = "https://www.hapag-lloyd.com/solutions/tracking/"
 VIEW = "S8510"  # constante del enlace "Detalles"
 
 CONTAINER_RE = re.compile(r"\b([A-Z]{4})[\s+]{0,2}(\d{6})[\s+]{0,2}(\d)\b")
+BLOCK_RE = re.compile(r"(just a moment|un momento|security check|access denied"
+                      r"|attention required|your browser was tested)", re.I)
 
 
-def _normalize_container(raw: str) -> str:
-    """Quita separadores de la forma cruda.
+def _norm_container(raw: str) -> str:
+    """Quita separadores: `HLBU++2959982` -> `HLBU2959982`.
 
-    El sitio entrega el contenedor como `HLBU++2959982`: el `+` es un espacio
-    codificado, no parte del número.
+    El parámetro llega a veces URL-encoded (`HLBU%2B%2B2959982`), así que hay
+    que decodificar antes: si no, el `B` de `%2B` se cuela en el número.
     """
-    return re.sub(r"[^A-Z0-9]", "", raw.upper())
+    from urllib.parse import unquote
+
+    text = unquote(raw.replace("+", " ")) if "%" in raw else raw
+    return re.sub(r"[^A-Z0-9]", "", text.upper())
 
 
 async def _dismiss(page) -> None:
@@ -88,106 +94,140 @@ async def _blocked(page) -> str:
         title = await page.title() or ""
     except Exception:
         title = ""
-    if re.search(r"(just a moment|un momento|security check|access denied"
-                 r"|attention required)", title, re.I):
+    if BLOCK_RE.search(title):
         return title.strip()[:90]
+    try:
+        text = await page.evaluate(
+            "() => document.body ? document.body.innerText.slice(0,600) : ''")
+    except Exception:
+        text = ""
+    if BLOCK_RE.search(text or ""):
+        return " ".join(text.split())[:120]
     return ""
 
 
-async def _submit_booking(page, bl: str) -> None:
-    """Escribe el B/L y envía. El botón 'Next' es el camino real."""
-    handle = await page.evaluate_handle(
-        """() => {
-            const cands = Array.from(document.querySelectorAll('input'))
-                .filter(el => el.offsetParent !== null &&
-                              !['hidden','checkbox','radio','submit','button']
-                                .includes(el.type));
-            return cands[0] || null;
-        }"""
-    )
-    el = handle.as_element()
-    if el is None:
-        print("  AVISO: no hay campo de texto visible")
-        return
-    ident = await page.evaluate("(e) => e.id || e.placeholder || '?'", el)
-    print(f"  campo: {ident!r}")
+async def _html(page) -> tuple[str, str]:
     try:
-        await el.click(timeout=8000)
-        await el.fill("")
-        await el.type(bl, delay=70)
+        html = await page.content()
     except Exception:
-        await el.evaluate(
-            """(e, v) => { e.value = v;
-                 e.dispatchEvent(new Event('input', {bubbles:true}));
-                 e.dispatchEvent(new Event('change', {bubbles:true})); }""",
-            bl)
-    print(f"  B/L escrito: {bl}")
-    clicked = False
-    for sel in ('button:has-text("Next")', 'button:has-text("Siguiente")',
-                'button[type="submit"]'):
-        try:
-            loc = page.locator(sel).first
-            if await loc.count() and await loc.is_visible():
-                await loc.click(timeout=6000)
-                print(f"  click en {sel}")
-                clicked = True
-                break
-        except Exception:
-            continue
-    if not clicked:
-        await el.press("Enter")
-        print("  Enter (no había botón visible)")
-
-
-async def _extract_containers(page) -> list[dict[str, str]]:
-    """Saca los contenedores del listado, con su enlace de detalle real.
-
-    Se prefieren los enlaces porque ya traen el contenedor exactamente como lo
-    espera el servidor (incluida la codificación de espacios).
-    """
-    try:
-        raw = await page.evaluate(
-            """() => Array.from(document.querySelectorAll('a[href]'))
-                    .map(a => ({href: a.href, text: (a.innerText || '').trim()}))
-                    .filter(a => /[?&]container=/.test(a.href))"""
-        )
-    except Exception:
-        raw = []
-
-    out: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for item in raw or []:
-        href = item.get("href") or ""
-        m = re.search(r"[?&]container=([^&]+)", href)
-        if not m:
-            continue
-        cont = m.group(1)
-        if cont in seen:
-            continue
-        seen.add(cont)
-        out.append({"container_param": cont, "href": href,
-                    "label": (item.get("text") or "")[:40]})
-
-    if out:
-        return out
-
-    # Sin enlaces: buscar números de contenedor en el texto de la página.
+        html = ""
     try:
         text = await page.evaluate(
             "() => document.body ? document.body.innerText : ''")
     except Exception:
         text = ""
-    for m in CONTAINER_RE.finditer(text or ""):
-        cont = _normalize_container(m.group(0))
-        if cont in seen:
+    return html, text
+
+
+async def _containers_from_page(page, html: str, text: str) -> list[dict[str, str]]:
+    """Extrae contenedores y sus enlaces de detalle.
+
+    Se prefieren los enlaces del HTML porque traen el contenedor tal cual lo
+    espera el servidor (`++` incluido). Si no hay enlaces (p. ej. la tabla se
+    pinta por JS), se cae al texto visible.
+    """
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    # 1) enlaces con ?container= (directos del listado)
+    for m in re.finditer(
+            r"""href=["']([^"']*[?&]container=[^"']+)["']""", html or "", re.I):
+        href = m.group(1)
+        cm = re.search(r"[?&]container=([^&\"']+)", href)
+        if not cm:
+            continue
+        raw = cm.group(1)
+        cont = _norm_container(raw)
+        if not cont or cont in seen:
             continue
         seen.add(cont)
-        out.append({"container_param": cont, "href": "", "label": "(del texto)"})
-    return out
+        found.append({"container": cont, "raw": raw,
+                      "href": href if href.startswith("http") else None,
+                      "source": "href"})
+
+    # 2) input/checkbox con el contenedor, y botón de detalles cercano
+    for m in re.finditer(
+            r"""(?:value|data-container|data-id)=["']([A-Z]{4}[\s+]{0,2}\d{6}[\s+]{0,2}\d)["']""",
+            html or "", re.I):
+        cont = _norm_container(m.group(1))
+        if not cont or cont in seen:
+            continue
+        seen.add(cont)
+        found.append({"container": cont, "raw": m.group(1),
+                      "href": None, "source": "attribute"})
+
+    # 3) texto visible
+    if not found:
+        for m in CONTAINER_RE.finditer(text or ""):
+            cont = _norm_container(m.group(0))
+            if not cont or cont in seen:
+                continue
+            seen.add(cont)
+            found.append({"container": cont, "raw": m.group(0),
+                          "href": None, "source": "text"})
+    return found
+
+
+async def _fill_and_submit(page, bl: str) -> bool:
+    """Escribe el B/L en el primer campo visible y envía."""
+    try:
+        handle = await page.evaluate_handle(
+            """() => {
+                const cands = Array.from(document.querySelectorAll('input'))
+                    .filter(el => el.offsetParent !== null &&
+                                  !['hidden','checkbox','radio','submit','button']
+                                    .includes(el.type));
+                return cands[0] || null;
+            }"""
+        )
+        el = handle.as_element()
+        if el is None:
+            print("     sin campo de texto visible")
+            return False
+        ident = await page.evaluate("(e) => e.id || e.placeholder || '?'", el)
+        print(f"     campo: {ident!r}")
+        try:
+            await el.click(timeout=8000)
+            await el.fill("")
+            await el.type(bl, delay=60)
+        except Exception:
+            await el.evaluate(
+                """(e, v) => { e.value = v;
+                     e.dispatchEvent(new Event('input', {bubbles:true}));
+                     e.dispatchEvent(new Event('change', {bubbles:true})); }""",
+                bl)
+        for sel in ('button:has-text("Next")', 'button:has-text("Siguiente")',
+                    'button[type="submit"]', 'input[type="submit"]'):
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() and await loc.is_visible():
+                    await loc.click(timeout=6000)
+                    print(f"     click {sel}")
+                    return True
+            except Exception:
+                continue
+        await el.press("Enter")
+        print("     Enter")
+        return True
+    except Exception as exc:
+        print(f"     formulario FALLÓ: {type(exc).__name__}: {str(exc)[:120]}")
+        return False
+
+
+async def _wait_containers(page, seconds: int = 25) -> tuple[list[dict[str, str]], str, str]:
+    """Espera a que aparezca al menos un contenedor en el DOM."""
+    last_html, last_text = "", ""
+    for _ in range(max(seconds // 2, 1)):
+        await page.wait_for_timeout(2000)
+        last_html, last_text = await _html(page)
+        found = await _containers_from_page(page, last_html, last_text)
+        if found:
+            return found, last_html, last_text
+    return [], last_html, last_text
 
 
 async def main() -> int:
-    ap = argparse.ArgumentParser(description="Flujo de detalle por contenedor de Hapag.")
+    ap = argparse.ArgumentParser(description="Flujo listado + detalle de Hapag.")
     ap.add_argument("bl", help="B/L o booking de Hapag")
     ap.add_argument("--proxy", default="", help="Proxy SOCKS5, p. ej. socks5://127.0.0.1:40000")
     ap.add_argument("--headed", action="store_true")
@@ -207,6 +247,7 @@ async def main() -> int:
         launch["proxy"] = {"server": args.proxy}
 
     containers: list[dict[str, str]] = []
+    listing_used = ""
     detail_ok = False
 
     try:
@@ -216,51 +257,58 @@ async def main() -> int:
             page.on("dialog", lambda d: asyncio.create_task(d.accept()))
 
             # ---------------------------------------------------------------
-            # A. Listado del B/L
+            # A. Listado: tres estrategias, en orden de probabilidad
             # ---------------------------------------------------------------
             print("=" * 78)
-            print(f"PASO A: consultar B/L {bl}")
+            print(f"PASO A: obtener el listado del B/L {bl}")
             print("=" * 78)
-            resp = await page.goto(BOOKING_URL, wait_until="domcontentloaded")
-            print(f"  HTTP {resp.status if resp else '?'}")
-            await page.wait_for_timeout(3500)
-            await _dismiss(page)
-            bloqueo = await _blocked(page)
-            if bloqueo:
-                print(f"  BLOQUEADO: {bloqueo}")
-                print("  revisa --proxy / WARP")
-                await page.close()
-                return 1
 
-            await _submit_booking(page, bl)
-            await page.wait_for_timeout(6000)
+            strategies = [
+                ("A1-legacy-deeplink", f"{LEGACY}?blno={bl}", False),
+                ("A2-legacy-form", LEGACY, True),
+                ("A3-spa-form", BOOKING, True),
+            ]
 
-            # La SPA puede tardar; se espera a que aparezca algún contenedor.
-            containers = []
-            for i in range(20):
-                containers = await _extract_containers(page)
-                if containers:
-                    print(f"  listado listo tras {(i + 1) * 2}s")
-                    break
-                await page.wait_for_timeout(2000)
+            for label, url, fill in strategies:
+                print(f"\n  [{label}] {url[:120]}")
+                try:
+                    r = await page.goto(url, wait_until="domcontentloaded",
+                                        timeout=90_000)
+                    print(f"     HTTP {r.status if r else '?'}")
+                    await page.wait_for_timeout(3000)
+                    await _dismiss(page)
+                    b = await _blocked(page)
+                    if b:
+                        print(f"     BLOQUEADO: {b}")
+                        continue
+                    if fill:
+                        if not await _fill_and_submit(page, bl):
+                            continue
+                        await page.wait_for_timeout(4000)
 
-            print(f"  URL tras consultar: {page.url}")
-            print(f"  contenedores encontrados: {len(containers)}")
-            for c in containers[:15]:
-                print(f"     {c['container_param']:<20} label={c['label']!r}")
-                if c["href"]:
-                    print(f"        {c['href'][:130]}")
-
-            (dump / f"listado-{bl}.json").write_text(
-                json.dumps(containers, ensure_ascii=False, indent=1),
-                encoding="utf-8")
-            try:
-                (dump / f"listado-{bl}.txt").write_text(
-                    await page.evaluate(
-                        "() => document.body ? document.body.innerText : ''"),
-                    encoding="utf-8")
-            except Exception:
-                pass
+                    found, html, text = await _wait_containers(page, 25)
+                    print(f"     URL: {page.url[:120]}")
+                    print(f"     HTML {len(html) // 1024}KB, texto {len(text)}B")
+                    print(f"     contenedores: {len(found)}")
+                    for c in found[:12]:
+                        print(f"        {c['container']:<16} raw={c['raw']!r:<22} "
+                              f"{c['source']}")
+                    if found:
+                        containers = found
+                        listing_used = label
+                        (dump / f"listado-{bl}.html").write_text(html, encoding="utf-8")
+                        (dump / f"listado-{bl}.txt").write_text(text, encoding="utf-8")
+                        (dump / f"listado-{bl}.json").write_text(
+                            json.dumps(found, ensure_ascii=False, indent=1),
+                            encoding="utf-8")
+                        print(f"     -> guardado listado-{bl}.txt/.html/.json")
+                        break
+                    # Guardar también el fallo: se necesita para diagnosticar.
+                    safe = re.sub(r"[^A-Za-z0-9]+", "-", label)
+                    (dump / f"listado-{bl}-{safe}.txt").write_text(
+                        text or "", encoding="utf-8")
+                except Exception as exc:
+                    print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
 
             # ---------------------------------------------------------------
             # B. Detalle por contenedor
@@ -270,50 +318,49 @@ async def main() -> int:
             print("=" * 78)
 
             if not containers:
-                print("  sin contenedores: se prueba la URL de detalle con el B/L")
-                targets = [{"container_param": bl, "href": "", "label": "(B/L)"}]
+                print("  sin contenedores: no hay detalle que pedir.")
+                print("  (una URL de detalle con el B/L devuelve la shell, no datos)")
             else:
-                targets = containers[:args.max_containers]
-
-            for idx, c in enumerate(targets):
-                param = c["container_param"]
-                url = (c["href"] or
-                       f"{BOOKING_URL}?view={VIEW}&container={quote(param)}")
-                print(f"\n  [{idx + 1}/{len(targets)}] {param}")
-                print(f"     {url[:140]}")
-                try:
-                    r = await page.goto(url, wait_until="domcontentloaded",
-                                        timeout=90_000)
-                    print(f"     HTTP {r.status if r else '?'}")
-                    await page.wait_for_timeout(5000)
-                    await _dismiss(page)
-                    b = await _blocked(page)
-                    if b:
-                        print(f"     BLOQUEADO: {b}")
-                        continue
-                    await page.wait_for_timeout(3000)
-
-                    html = await page.content()
-                    text = await page.evaluate(
-                        "() => document.body ? document.body.innerText : ''")
-                    safe = re.sub(r"[^A-Za-z0-9]+", "-", param)[:28]
-                    (dump / f"detalle-{safe}.html").write_text(html, encoding="utf-8")
-                    (dump / f"detalle-{safe}.txt").write_text(text, encoding="utf-8")
-                    print(f"     HTML {len(html) // 1024}KB, texto {len(text)}B "
-                          f"-> detalle-{safe}.txt")
-
-                    # Resumen legible de lo que hay en la página.
-                    flat = " ".join(text.split())
-                    print(f"     texto: {flat[:280]}")
-                    for kw in ("Vessel", "Buque", "Voyage", "Viaje", "ETA",
-                               "Arrival", "Llegada", "Discharge", "Descarga",
-                               "MANZANILLO", "Manzanillo"):
-                        if kw.lower() in flat.lower():
-                            print(f"     contiene {kw!r}")
-                    if "HLBU" in flat or param[:4] in flat:
-                        detail_ok = True
-                except Exception as exc:
-                    print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
+                for idx, c in enumerate(containers[:args.max_containers]):
+                    param = c["container"]
+                    # Dos formas: la normalizada y la cruda del sitio (`++`).
+                    variants = [("norm", param)]
+                    if c["raw"] and c["raw"] != param:
+                        variants.append(("raw", c["raw"]))
+                    for vlabel, vparam in variants:
+                        url = f"{BOOKING}?view={VIEW}&container={quote(vparam)}"
+                        print(f"\n  [{idx + 1}/{len(containers)}] {param} ({vlabel})")
+                        print(f"     {url[:140]}")
+                        try:
+                            r = await page.goto(url, wait_until="domcontentloaded",
+                                                timeout=90_000)
+                            print(f"     HTTP {r.status if r else '?'}")
+                            await page.wait_for_timeout(6000)
+                            await _dismiss(page)
+                            b = await _blocked(page)
+                            if b:
+                                print(f"     BLOQUEADO: {b}")
+                                continue
+                            html, text = await _html(page)
+                            flat = " ".join(text.split())
+                            print(f"     HTML {len(html) // 1024}KB, texto {len(text)}B")
+                            print(f"     texto: {flat[:300]}")
+                            safe = re.sub(r"[^A-Za-z0-9]+", "-", f"{param}-{vlabel}")
+                            (dump / f"detalle-{safe}.html").write_text(html, encoding="utf-8")
+                            (dump / f"detalle-{safe}.txt").write_text(text, encoding="utf-8")
+                            hits = [k for k in ("Vessel", "Buque", "Voyage", "Viaje",
+                                                "ETA", "Arrival", "Llegada", "Discharge",
+                                                "Descarga", "MANZANILLO")
+                                    if k.lower() in flat.lower()]
+                            if hits:
+                                print(f"     términos de tracking: {hits}")
+                            # El detalle real menciona el contenedor y eventos.
+                            if param[:6].lower() in flat.lower() and len(text) > 1500:
+                                detail_ok = True
+                                print("     -> detalle con datos")
+                                break
+                        except Exception as exc:
+                            print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
 
             await page.close()
     except Exception as exc:
@@ -324,8 +371,9 @@ async def main() -> int:
         raise
 
     print("\n" + "=" * 78)
-    print(f"RESULTADO: {len(containers)} contenedores, "
-          f"detalle {'OK' if detail_ok else 'sin datos'}")
+    print(f"RESULTADO: listado={listing_used or 'ninguno'}, "
+          f"{len(containers)} contenedores, "
+          f"detalle={'OK' if detail_ok else 'sin datos'}")
     print("=" * 78)
     return 0 if containers else 2
 
