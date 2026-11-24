@@ -32,7 +32,6 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -120,41 +119,50 @@ async def _html(page) -> tuple[str, str]:
 
 
 async def _containers_from_page(page, html: str, text: str) -> list[dict[str, str]]:
-    """Extrae contenedores y sus enlaces de detalle.
+    """Extrae los contenedores del listado, con su índice de fila.
 
-    Se prefieren los enlaces del HTML porque traen el contenedor tal cual lo
-    espera el servidor (`++` incluido). Si no hay enlaces (p. ej. la tabla se
-    pinta por JS), se cae al texto visible.
+    El `row` es lo que luego permite marcar el radio correcto y pulsar
+    Details: sin él solo se tendría el número, no la forma de pedir su detalle.
     """
     found: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    # 1) enlaces con ?container= (directos del listado)
+    # 1) filas del formulario JSF (la fuente buena: trae radio + datos)
+    rows = await _rows_from_page(page)
+    for idx, row in enumerate(rows):
+        cells = row.get("cells") or []
+        cont = ""
+        for c in cells:
+            m = CONTAINER_RE.search(c)
+            if m:
+                cont = _norm_container(m.group(0))
+                break
+        if not cont or cont in seen:
+            continue
+        seen.add(cont)
+        found.append({
+            "container": cont,
+            "row": str(idx),
+            "radio": row.get("radioId") or "",
+            "cells": " | ".join(cells)[:120],
+            "source": "row",
+        })
+    if found:
+        return found
+
+    # 2) enlaces con ?container= (versiones antiguas del listado)
     for m in re.finditer(
             r"""href=["']([^"']*[?&]container=[^"']+)["']""", html or "", re.I):
         href = m.group(1)
         cm = re.search(r"[?&]container=([^&\"']+)", href)
         if not cm:
             continue
-        raw = cm.group(1)
-        cont = _norm_container(raw)
+        cont = _norm_container(cm.group(1))
         if not cont or cont in seen:
             continue
         seen.add(cont)
-        found.append({"container": cont, "raw": raw,
-                      "href": href if href.startswith("http") else None,
-                      "source": "href"})
-
-    # 2) input/checkbox con el contenedor, y botón de detalles cercano
-    for m in re.finditer(
-            r"""(?:value|data-container|data-id)=["']([A-Z]{4}[\s+]{0,2}\d{6}[\s+]{0,2}\d)["']""",
-            html or "", re.I):
-        cont = _norm_container(m.group(1))
-        if not cont or cont in seen:
-            continue
-        seen.add(cont)
-        found.append({"container": cont, "raw": m.group(1),
-                      "href": None, "source": "attribute"})
+        found.append({"container": cont, "row": "", "radio": "",
+                      "href": href, "source": "href"})
 
     # 3) texto visible
     if not found:
@@ -163,8 +171,8 @@ async def _containers_from_page(page, html: str, text: str) -> list[dict[str, st
             if not cont or cont in seen:
                 continue
             seen.add(cont)
-            found.append({"container": cont, "raw": m.group(0),
-                          "href": None, "source": "text"})
+            found.append({"container": cont, "row": "", "radio": "",
+                          "source": "text"})
     return found
 
 
@@ -212,6 +220,80 @@ async def _fill_and_submit(page, bl: str) -> bool:
     except Exception as exc:
         print(f"     formulario FALLÓ: {type(exc).__name__}: {str(exc)[:120]}")
         return False
+
+
+async def _rows_from_page(page) -> list[dict[str, Any]]:
+    """Lee las filas del listado JSF: radio, tipo, contenedor y última actividad.
+
+    El botón "Details" no es un enlace: es un submit de formulario JSF que
+    envía el radio seleccionado y el servidor responde con la URL
+    `?view=S8510&container=<CONT>`. Por eso construir esa URL a mano devuelve
+    la shell vacía: falta el estado del formulario.
+    """
+    try:
+        rows = await page.evaluate(
+            """() => {
+                const out = [];
+                const radios = Array.from(document.querySelectorAll(
+                    'input[type=radio][name]'));
+                for (const r of radios) {
+                    const tr = r.closest('tr');
+                    if (!tr) continue;
+                    const cells = Array.from(tr.querySelectorAll('td'))
+                        .map(td => (td.innerText || '').trim());
+                    out.push({radioId: r.id, radioName: r.name,
+                              radioValue: r.value, cells: cells});
+                }
+                return out;
+            }"""
+        )
+        return rows or []
+    except Exception:
+        return []
+
+
+async def _container_in_row(cells: list[str]) -> str:
+    for c in cells:
+        m = CONTAINER_RE.search(c)
+        if m:
+            return _norm_container(m.group(0))
+    return ""
+
+
+async def _click_details(page, row_index: int) -> bool:
+    """Selecciona el radio de la fila y pulsa Details (submit JSF real)."""
+    try:
+        info = await page.evaluate(
+            """(idx) => {
+                const radios = Array.from(document.querySelectorAll(
+                    'input[type=radio][name]'));
+                const r = radios[idx];
+                if (!r) return null;
+                r.click();
+                const label = document.querySelector(`label[for="${r.id}"]`);
+                if (label) label.click();
+                return {id: r.id, checked: r.checked};
+            }""", row_index)
+        if not info:
+            print(f"     no existe el radio {row_index}")
+            return False
+        print(f"     radio {info['id']!r} checked={info['checked']}")
+    except Exception as exc:
+        print(f"     no se pudo marcar el radio: {type(exc).__name__}")
+        return False
+
+    for sel in ('button[value="Details"]', 'button:has-text("Details")',
+                'input[value="Details"]'):
+        try:
+            loc = page.locator(sel).first
+            if await loc.count():
+                await loc.click(timeout=15000)
+                print(f"     click {sel}")
+                return True
+        except Exception:
+            continue
+    print("     no se encontró el botón Details")
+    return False
 
 
 async def _wait_containers(page, seconds: int = 25) -> tuple[list[dict[str, str]], str, str]:
@@ -311,56 +393,55 @@ async def main() -> int:
                     print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
 
             # ---------------------------------------------------------------
-            # B. Detalle por contenedor
+            # B. Detalle: seleccionar fila y pulsar Details (flujo JSF real)
             # ---------------------------------------------------------------
             print("\n" + "=" * 78)
-            print("PASO B: detalle por contenedor (view=S8510)")
+            print("PASO B: detalle por contenedor (radio + botón Details)")
             print("=" * 78)
 
             if not containers:
                 print("  sin contenedores: no hay detalle que pedir.")
-                print("  (una URL de detalle con el B/L devuelve la shell, no datos)")
             else:
                 for idx, c in enumerate(containers[:args.max_containers]):
-                    param = c["container"]
-                    # Dos formas: la normalizada y la cruda del sitio (`++`).
-                    variants = [("norm", param)]
-                    if c["raw"] and c["raw"] != param:
-                        variants.append(("raw", c["raw"]))
-                    for vlabel, vparam in variants:
-                        url = f"{BOOKING}?view={VIEW}&container={quote(vparam)}"
-                        print(f"\n  [{idx + 1}/{len(containers)}] {param} ({vlabel})")
-                        print(f"     {url[:140]}")
-                        try:
-                            r = await page.goto(url, wait_until="domcontentloaded",
-                                                timeout=90_000)
-                            print(f"     HTTP {r.status if r else '?'}")
-                            await page.wait_for_timeout(6000)
-                            await _dismiss(page)
-                            b = await _blocked(page)
-                            if b:
-                                print(f"     BLOQUEADO: {b}")
-                                continue
-                            html, text = await _html(page)
-                            flat = " ".join(text.split())
-                            print(f"     HTML {len(html) // 1024}KB, texto {len(text)}B")
-                            print(f"     texto: {flat[:300]}")
-                            safe = re.sub(r"[^A-Za-z0-9]+", "-", f"{param}-{vlabel}")
-                            (dump / f"detalle-{safe}.html").write_text(html, encoding="utf-8")
-                            (dump / f"detalle-{safe}.txt").write_text(text, encoding="utf-8")
-                            hits = [k for k in ("Vessel", "Buque", "Voyage", "Viaje",
-                                                "ETA", "Arrival", "Llegada", "Discharge",
-                                                "Descarga", "MANZANILLO")
-                                    if k.lower() in flat.lower()]
-                            if hits:
-                                print(f"     términos de tracking: {hits}")
-                            # El detalle real menciona el contenedor y eventos.
-                            if param[:6].lower() in flat.lower() and len(text) > 1500:
-                                detail_ok = True
-                                print("     -> detalle con datos")
-                                break
-                        except Exception as exc:
-                            print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
+                    row = c.get("row") or ""
+                    print(f"\n  [{idx + 1}/{len(containers)}] {c['container']}")
+                    print(f"     fila: {row}  celdas: {c.get('cells', '')[:100]}")
+                    if row == "":
+                        print("     sin índice de fila: no se puede operar el JSF")
+                        continue
+                    try:
+                        ok = await _click_details(page, int(row))
+                        if not ok:
+                            continue
+                        await page.wait_for_timeout(7000)
+                        # El submit navega a ?view=S8510&container=...
+                        print(f"     URL: {page.url[:150]}")
+                        b = await _blocked(page)
+                        if b:
+                            print(f"     BLOQUEADO: {b}")
+                            continue
+                        html, text = await _html(page)
+                        flat = " ".join(text.split())
+                        print(f"     HTML {len(html) // 1024}KB, texto {len(text)}B")
+                        print(f"     texto: {flat[:400]}")
+                        safe = re.sub(r"[^A-Za-z0-9]+", "-", c["container"])
+                        (dump / f"detalle-{safe}.html").write_text(html, encoding="utf-8")
+                        (dump / f"detalle-{safe}.txt").write_text(text, encoding="utf-8")
+                        hits = [k for k in ("Vessel", "Buque", "Voyage", "Viaje",
+                                            "ETA", "Arrival", "Llegada", "Discharge",
+                                            "Descarga", "MANZANILLO")
+                                if k.lower() in flat.lower()]
+                        if hits:
+                            print(f"     términos de tracking: {hits}")
+                        if c["container"][:4].lower() in flat.lower() and len(text) > 1500:
+                            detail_ok = True
+                            print("     -> detalle con datos")
+                        # Volver al listado para la siguiente fila.
+                        await page.go_back(wait_until="domcontentloaded")
+                        await page.wait_for_timeout(3500)
+                        await _dismiss(page)
+                    except Exception as exc:
+                        print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
 
             await page.close()
     except Exception as exc:
