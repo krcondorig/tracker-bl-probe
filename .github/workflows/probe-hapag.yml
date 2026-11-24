@@ -120,8 +120,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Fetch Camoufox browser
-        run: python -m camoufox fetch
+      - name: Ensure Camoufox browser
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/ensure_camoufox.py
 
       - name: Verify egress goes through WARP
         run: |

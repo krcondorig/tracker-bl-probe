@@ -200,12 +200,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Fetch Camoufox browser
+      - name: Ensure Camoufox browser
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          # `fetch` es idempotente: si el binario ya está en caché, termina al
-          # instante. `path` verifica que quedó instalado.
-          python -m camoufox fetch
+          # Sin token, `camoufox fetch` choca con el rate limit de
+          # api.github.com, que los runners comparten por IP.
+          python scripts/ensure_camoufox.py
           echo "camoufox dir: $(python -m camoufox path)"
 
       - name: Show Camoufox version
