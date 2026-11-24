@@ -350,7 +350,6 @@ IGNORE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".woff",
 # Hapag-Lloyd: el listado y el detalle son páginas distintas de la app legacy.
 HAPAG_TRACK = "https://www.hapag-lloyd.com/en/online-business/track/"
 HAPAG_LISTING = HAPAG_TRACK + "track-by-booking-solution-legacy.html"
-HAPAG_VIEW = "S8510"  # constante del enlace "Details"
 
 # Estados de la tabla de movimientos. Se listan completos porque el formulario
 # los emite con ese texto exacto en la primera columna.
@@ -359,10 +358,7 @@ HAPAG_STATES = (
     "Arrival in", "Departure from", "Loaded", "Discharged",
     "Vessel departed", "Vessel arrived",
 )
-_HAPAG_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CONTAINER_TOKEN = re.compile(r"\b([A-Z]{4})[\s+]{0,2}(\d{6})[\s+]{0,2}(\d)\b")
-# Transportes terrestres: si el evento de descarga los trae, no es un buque.
-_LAND_TRANSPORT = ("truck", "rail", "barge", "train", "vessel", "")
 
 
 async def _dismiss_consent(page) -> None:
