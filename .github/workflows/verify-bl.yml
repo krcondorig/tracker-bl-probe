@@ -82,19 +82,55 @@ jobs:
       - name: Asegurar binario de Camoufox
         run: python scripts/ensure_camoufox.py
 
-      - name: Instalar y conectar WARP
-        env:
-          PROXY: ${{ github.event.inputs.proxy || 'socks5://127.0.0.1:40000' }}
+      - name: Instalar Cloudflare WARP
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cloudflare-warp
-          warp-cli --accept-tos registration new
+          # cloudflare-warp no está en los repos de Ubuntu: hay que añadir el
+          # suyo, o `apt-get install cloudflare-warp` responde
+          # "Unable to locate package".
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+            | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+          # Update completo: libtss2-tctildr0t64 vive en el pocket `security` y
+          # un update restringido al repo de WARP lo deja sin candidato.
+          sudo apt-get update -qq
+          if ! sudo apt-get install -y -qq cloudflare-warp; then
+            echo "::warning::cloudflare-warp no instaló a la primera; se inspecciona la dependencia."
+            apt-cache policy libtss2-tctildr0t64 || true
+            sudo apt-get install -y -qq libtss2-tctildr0t64 \
+              || sudo apt-get install -y -qq libtss2-tctildr0 \
+              || true
+            sudo apt-get install -y -qq -f cloudflare-warp
+          fi
+          warp-cli --version
+
+      - name: Conectar WARP por SOCKS5
+        run: |
+          set -euo pipefail
+          if ! sudo systemctl enable --now warp-svc 2>/dev/null; then
+            sudo nohup warp-svc >/tmp/warp-svc.log 2>&1 &
+          fi
+          for i in $(seq 1 30); do
+            warp-cli --accept-tos status >/dev/null 2>&1 && break
+            sleep 1
+          done
+          if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
+            warp-cli --accept-tos registration new
+          fi
           warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos proxy port 40000
           warp-cli --accept-tos connect
-          # El modo proxy abre un SOCKS5 local en el 40000; se espera a que
-          # responda antes de lanzar nada, o el navegador falla al arrancar.
           for i in $(seq 1 40); do
+            STATE="$(warp-cli --accept-tos status 2>/dev/null || echo unknown)"
+            echo "warp: ${STATE}"
+            case "$STATE" in *Connected*|*Proxy*) break ;; esac
+            sleep 2
+          done
+          # Comprobar la salida real: si el SOCKS5 no responde, el navegador
+          # falla al arrancar y el error sería engañoso.
+          for i in $(seq 1 20); do
             if curl -s -m 5 --socks5 127.0.0.1:40000 https://api.ipify.org >/dev/null 2>&1; then
               echo "WARP listo tras ${i}s"
               break
