@@ -1,31 +1,32 @@
-"""Hapag-Lloyd: listado legacy + tabla de movimientos.
+"""Hapag-Lloyd: detalle por contenedor en HTML legacy.
 
 Por qué Hapag necesita un módulo aparte y no un `deep_link` como MSC y Maersk:
 
-1. No hay una URL de detalle que se pueda componer. El listado es un formulario
-   JSF y el botón `Details` es un `type="button"` manejado por ExtJS que envía un
-   POST con el `javax.faces.ViewState` de la sesión. Armar
-   `?view=S8510&container=...` devuelve la shell de la SPA nueva, no el detalle.
-2. La página de detalle es **HTML con una tabla de movimientos**, no JSON, así
-   que la intercepción de respuestas de `browser.py` no la ve.
-3. El número del contenedor viene relleno con **dos espacios** en el HTML
-   servido (`HLBU  2959982`) y el submit los codifica como `++`
-   (`container=HLBU++2959982`). El DOM los colapsa, por eso se lee el HTML.
+1. La página de detalle es **HTML con una tabla de movimientos**, no JSON, así
+   que la intercepción de respuestas de `browser.py` no la ve: hay que leer
+   `innerText` y parsear filas.
+2. El detalle se abre con
+   `track-by-container-solution-legacy.html?view=S8510&container=...` y esa URL
+   **sí consulta el contenedor pedido**. Medido en el runner con dos
+   contenedores del mismo B/L: cada uno devuelve su propia tabla
+   (`2026-08-22 14:30` frente a `2026-08-14 06:44`). No hay que rellenar ningún
+   formulario.
+3. El número puede venir con **dos espacios** de relleno (`HLBU  2959982`) en la
+   variante por B/L; el sitio los codifica como `++`
+   (`container=HLBU++2959982`), que es la forma del parámetro.
 
-Este módulo se ocupa de lo que se puede probar sin navegador: leer el listado,
-traducir el parámetro, parsear los movimientos y convertirlos al esquema común.
-La navegación (marcar el radio, pulsar `Details`) vive en `browser.py`.
+Este módulo se ocupa de lo que se puede probar sin navegador: la URL, el
+parámetro, el parseo de la tabla y la conversión al esquema común. La navegación
+(abrir, cerrar consentimiento, esperar la tabla) vive en `browser.py`.
 """
 
 from __future__ import annotations
 
-import html as html_lib
 import re
 from typing import Any
 
 HAPAG_TRACK = "https://www.hapag-lloyd.com/en/online-business/track/"
-CONTAINER_LISTING = HAPAG_TRACK + "track-by-container-solution-legacy.html"
-BOOKING_LISTING = HAPAG_TRACK + "track-by-booking-solution-legacy.html"
+CONTAINER_PAGE = HAPAG_TRACK + "track-by-container-solution-legacy.html"
 
 # Estados de la tabla de movimientos, con el texto exacto que emite el sitio.
 HAPAG_STATES: tuple[str, ...] = (
@@ -47,78 +48,51 @@ def normalize_container(raw: str) -> str:
 
 
 def container_param(raw: str) -> str:
-    """Traduce el texto de la celda a la forma que envía el formulario.
+    """Traduce el texto de la celda a la forma que envía el sitio.
 
     `HLBU  2959982` -> `HLBU++2959982`
 
-    Cada espacio se vuelve `+`, que es exactamente lo que produce el submit del
-    formulario. No se usa `quote()` porque escaparía el `+` a `%2B` y el servidor
-    no encontraría el contenedor.
+    Cada espacio se vuelve `+`, que es exactamente lo que produce el sitio. No
+    se usa `quote()` porque escaparía el `+` a `%2B` y el servidor no
+    encontraría el contenedor.
     """
     return (raw or "").strip().replace(" ", "+")
 
 
-def listing_url(container: str, bl: str | None = None) -> str:
-    """URL del listado legacy.
+def padded_container(raw: str) -> str:
+    """Devuelve el número con el relleno que emite el sitio: `HLBU  2959982`.
 
-    Por defecto se busca **por contenedor**, que es lo que recibe el scraper.
-    `bl` existe porque la variante por B/L es la única verificada de punta a
-    punta contra el sitio real (`track-by-booking-solution-legacy.html?blno=`),
-    y conviene poder usarla sin reescribir el flujo.
+    El listado y el propio formulario usan cuatro letras, dos espacios y siete
+    dígitos. Se rellena para pedir la misma forma que se midió funcionando, en
+    vez de una variante compacta que no se comprobó.
     """
-    if bl:
-        return f"{BOOKING_LISTING}?blno={normalize_container(bl)}"
-    return f"{CONTAINER_LISTING}?container={container_param(container)}"
+    number = normalize_container(raw)
+    if len(number) != 11:
+        return number
+    return f"{number[:4]}  {number[4:]}"
 
 
-def rows_from_html(page_html: str) -> list[dict[str, Any]]:
-    """Filas seleccionables del listado, leídas del HTML servido.
+def container_page() -> str:
+    """Página de entrada del detalle por contenedor.
 
-    Se parsea el HTML y no el DOM a propósito: el servidor emite
-    `<span class="nonEditableContent">HLBU  2959982</span>` con los dos espacios
-    intactos, y el `innerText` del DOM los colapsa a uno. Esos dos espacios son
-    significativos porque el submit los convierte en `++`, parte del parámetro.
-
-    `param` es la forma exacta que hay que enviar; `container` es el número
-    normalizado, para comparar y para reportar.
+    Abrirla con `?view=S8510&container=...` ya devuelve el detalle: medido en el
+    runner con dos contenedores del mismo B/L, cada uno trae su propia tabla
+    (`2026-08-22 14:30` frente a `2026-08-14 06:44`). No hace falta formulario
+    ni pulsar `Find`.
     """
-    rows: list[dict[str, Any]] = []
-    if not page_html:
-        return rows
+    return CONTAINER_PAGE
 
-    for tr in re.findall(r"<tr\b[^>]*>(.*?)</tr>", page_html, re.S | re.I):
-        radio = re.search(r"<input[^>]*type=[\"']radio[\"'][^>]*>", tr, re.I)
-        if not radio:
-            continue
-        tag = radio.group(0)
-        radio_id = re.search(r"id=[\"']([^\"']+)[\"']", tag)
-        radio_name = re.search(r"name=[\"']([^\"']+)[\"']", tag)
 
-        cell_html = re.findall(r"<td\b[^>]*>(.*?)</td>", tr, re.S | re.I)
-        cells = [
-            html_lib.unescape(re.sub(r"<[^>]+>", "", cell)).strip()
-            for cell in cell_html
-        ]
+def detail_url(container: str) -> str:
+    """URL navegable del detalle de un contenedor.
 
-        raw_container = ""
-        for cell in cell_html:
-            plain = html_lib.unescape(re.sub(r"<[^>]+>", "", cell))
-            if CONTAINER_TOKEN.search(plain):
-                raw_container = plain.replace("\r", " ").replace("\n", " ").strip()
-                break
+    `view=S8510` es la forma exacta que produce el sitio al abrir un detalle, y
+    la que se midió funcionando. Se envía además el número con el relleno del
+    sitio (`HLBU++2959982`), que es la forma medida; la compacta no se comprobó.
 
-        number = normalize_container(raw_container) if raw_container else ""
-        if not number:
-            continue
-        rows.append({
-            "container": number,
-            "param": container_param(raw_container),
-            "radio_id": radio_id.group(1) if radio_id else "",
-            "radio_name": radio_name.group(1) if radio_name else "",
-            "cells": cells,
-            "raw": raw_container,
-        })
-    return rows
+    Sin `view` el sitio también responde, pero no se usa una variante no medida.
+    """
+    return f"{CONTAINER_PAGE}?view=S8510&container={container_param(padded_container(container))}"
 
 
 def _cells_from_line(line: str) -> list[str] | None:
@@ -237,8 +211,3 @@ def is_real_detail(text: str) -> bool:
     """
     flat = " ".join((text or "").split()).lower()
     return sum(1 for state in HAPAG_STATES if state.lower() in flat) >= 2
-
-
-def deep_link(container: str) -> str:
-    """URL de entrada al flujo de Hapag."""
-    return listing_url(container)

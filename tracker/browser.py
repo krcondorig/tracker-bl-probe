@@ -33,11 +33,10 @@ from .carriers import (
 )
 from .config import Settings
 from .hapag import (
+    detail_url,
     is_real_detail,
-    listing_url,
     normalize_container,
     parse_movements,
-    rows_from_html,
     to_payload,
 )
 from .models import Carrier
@@ -91,6 +90,20 @@ class CaptureResult:
 def _is_ignored_url(url: str) -> bool:
     lowered = url.lower()
     return any(lowered.split("?")[0].endswith(ext) for ext in IGNORED_EXTENSIONS)
+
+
+def captured_is_usable(captured: list[CapturedResponse]) -> bool:
+    """¿Alguna respuesta capturada sirve para responder por el contenedor?
+
+    No basta con que la lista no esté vacía: MSC responde JSON válido a
+    `GetCountryAgencies` (el selector de agencias del pie de página) antes de
+    la respuesta de tracking. Ese JSON no trae eventos ni menciona el
+    contenedor, así que "hay algo capturado" no significa "hay datos útiles".
+
+    Se usa para decidir si merece la pena rellenar el formulario: si solo hay
+    JSON inútil, el deep link no disparó la búsqueda y hay que hacerlo a mano.
+    """
+    return any(record.has_events or record.matched_container for record in captured)
 
 
 def _count_event_shapes(node: Any, depth: int = 0) -> int:
@@ -365,8 +378,10 @@ class BrowserSession:
                     break
                 await asyncio.sleep(0.5)
 
-            if not captured:
-                # Respaldo: rellenar el formulario cuando el deep link no dispara XHR.
+            if not captured_is_usable(captured):
+                # Respaldo: rellenar el formulario cuando el deep link no dispara
+                # el XHR. No basta `if not captured`: MSC contesta JSON inútil
+                # (GetCountryAgencies) y el formulario nunca se rellenaba.
                 await self._fallback_form(page, adapter, container)
                 deadline = asyncio.get_running_loop().time() + min(self._settings.wait_seconds, 15)
                 while asyncio.get_running_loop().time() < deadline:
@@ -398,13 +413,16 @@ class BrowserSession:
 
     # ------------------------------------------------------------- Hapag (HTML)
     async def _capture_hapag(self, container: str) -> CaptureResult:
-        """Listado legacy + clic real en `Details` + tabla de movimientos.
+        """Abre el detalle del contenedor y parsea su tabla de movimientos.
 
-        No se compone la URL del detalle porque no existe: `Details` es un
-        `type="button"` que la app legacy (ExtJS) maneja enviando un POST JSF
-        con el `javax.faces.ViewState` de la sesión. Armar
-        `?view=S8510&container=...` a mano devuelve la shell de la SPA nueva,
-        que no tiene la tabla. Por eso se marca el radio y se pulsa el botón.
+        La página `track-by-container-solution-legacy.html?view=S8510&container=`
+        **ya es el detalle**: no hay listado que recorrer ni botón `Details` que
+        pulsar. Medido en el runner con dos contenedores del mismo B/L, cada uno
+        devuelve su propia tabla.
+
+        Antes se navegaba esperando radios de listado y se pulsaba `Details`, algo
+        que solo existe en la variante por B/L. En producción eso daba
+        `El listado de Hapag no trajo contenedores` para todo contenedor.
 
         El detalle es HTML, no JSON: se lee `innerText` y lo parsea
         `hapag.parse_movements`. El resultado se convierte al esquema anidado
@@ -413,13 +431,13 @@ class BrowserSession:
         page = await self._new_page()
         wanted = normalize_container(container)
         try:
-            listing = listing_url(container)
+            url = detail_url(container)
             try:
-                await page.goto(listing, wait_until="domcontentloaded")
+                await page.goto(url, wait_until="domcontentloaded")
             except PlaywrightTimeout:
-                return CaptureResult(payload=None, block_reason="Timeout en el listado de Hapag")
+                return CaptureResult(payload=None, block_reason="Timeout en el detalle de Hapag")
             except Exception as exc:  # noqa: BLE001
-                return CaptureResult(payload=None, block_reason=f"Fallo al abrir el listado: {exc}")
+                return CaptureResult(payload=None, block_reason=f"Fallo al abrir el detalle: {exc}")
 
             await self._dismiss_consent(page)
 
@@ -430,58 +448,36 @@ class BrowserSession:
                     page_title=await self._safe_title(page),
                 )
 
-            # El listado lo pinta ExtJS: se espera a que haya radios.
-            rows: list[dict[str, Any]] = []
+            # La tabla la pinta ExtJS después del HTML: se sondea hasta que
+            # aparezcan movimientos, no solo hasta que cargue el documento.
+            text = ""
+            events: list[dict[str, Any]] = []
             deadline = asyncio.get_running_loop().time() + self._settings.wait_seconds
             while asyncio.get_running_loop().time() < deadline:
-                rows = rows_from_html(await page.content())
-                if rows:
-                    break
+                text = await page.evaluate(
+                    "() => (document.body ? document.body.innerText : '')"
+                )
+                if is_real_detail(text):
+                    events = parse_movements(text)
+                    if events:
+                        break
                 await page.wait_for_timeout(1000)
 
-            if not rows:
+            if not events:
                 blocked, reason = await self._detect_block(page)
                 if blocked:
                     return CaptureResult(
                         payload=None, blocked=True, block_reason=reason,
                         page_title=await self._safe_title(page),
                     )
-                # Sin filas y sin challenge: la naviera no conoce el contenedor,
-                # o el listado por contenedor no es esta página.
                 return CaptureResult(
                     payload=None,
-                    block_reason="El listado de Hapag no trajo contenedores",
+                    block_reason="El detalle de Hapag no trajo movimientos",
                     page_title=await self._safe_title(page),
                     candidate_urls=[page.url],
                     responses_seen=1,
                 )
 
-            # Preferir la fila del contenedor pedido; si no aparece, el listado
-            # se consultó por B/L y hay que quedarse con la primera.
-            index = next(
-                (i for i, row in enumerate(rows) if row["container"] == wanted), 0
-            )
-
-            text = await self._open_hapag_detail(page, listing, index)
-            if text is None:
-                return CaptureResult(
-                    payload=None,
-                    block_reason="No se pudo abrir el detalle de Hapag",
-                    page_title=await self._safe_title(page),
-                    candidate_urls=[page.url],
-                    responses_seen=1,
-                )
-
-            if not is_real_detail(text):
-                return CaptureResult(
-                    payload=None,
-                    block_reason="El detalle de Hapag no tenía tabla de movimientos",
-                    page_title=await self._safe_title(page),
-                    candidate_urls=[page.url],
-                    responses_seen=1,
-                )
-
-            events = parse_movements(text)
             body = to_payload(wanted, events)
             if body is None:
                 return CaptureResult(
@@ -491,7 +487,6 @@ class BrowserSession:
                     responses_seen=1,
                 )
 
-            number = next((row["container"] for row in rows), wanted)
             record = CapturedResponse(
                 url=page.url,
                 status=200,
@@ -499,11 +494,10 @@ class BrowserSession:
                 body=body,
                 carrier=Carrier.HAPAG_LLOYD,
                 priority=100,
-                has_events=bool(events),
+                has_events=True,
                 matched_container=True,
             )
-            log.info("[%s] Hapag: %d movimientos del contenedor %s",
-                     container, len(events), number)
+            log.info("[%s] Hapag: %d movimientos", container, len(events))
             return CaptureResult(
                 payload=record,
                 page_title=await self._safe_title(page),
@@ -515,57 +509,6 @@ class BrowserSession:
                 await page.close()
             except Exception:  # noqa: BLE001
                 pass
-
-    async def _open_hapag_detail(self, page: Page, listing: str, index: int) -> str | None:
-        """Vuelve al listado, marca el radio `index` y pulsa `Details`.
-
-        Se vuelve al listado en cada intento: tras abrir un detalle la URL sigue
-        conteniendo el nombre legacy, así que comprobar la URL no sirve para
-        saber si se está en el formulario, y sin los radios el clic falla.
-        """
-        try:
-            await page.goto(listing, wait_until="domcontentloaded")
-            await page.wait_for_timeout(2500)
-            await self._dismiss_consent(page)
-
-            picked = await page.evaluate(
-                """(idx) => {
-                    const radios = Array.from(document.querySelectorAll(
-                        'input[type=radio][name]'));
-                    const r = radios[idx];
-                    if (!r) return null;
-                    r.click();
-                    const label = document.querySelector(`label[for="${r.id}"]`);
-                    if (label) label.click();
-                    return {id: r.id, checked: r.checked};
-                }""",
-                index,
-            )
-            if not picked:
-                return None
-
-            try:
-                async with page.expect_navigation(timeout=45_000):
-                    await page.evaluate(
-                        """() => {
-                            const b = document.querySelector('button[value="Details"]');
-                            if (b) { b.click(); return true; }
-                            return false;
-                        }"""
-                    )
-            except Exception:  # noqa: BLE001 - puede pintar sin navegar
-                await page.wait_for_timeout(6000)
-
-            await page.wait_for_timeout(3500)
-            blocked, _ = await self._detect_block(page)
-            if blocked:
-                return None
-            return await page.evaluate(
-                "() => (document.body ? document.body.innerText : '')"
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("No se pudo abrir el detalle de Hapag: %s", exc)
-            return None
 
     @staticmethod
     async def _safe_title(page: Page) -> str | None:

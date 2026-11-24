@@ -30,11 +30,14 @@ from scraper import (
 from tracker.config import load_settings
 
 from tracker.hapag import (
+    CONTAINER_PAGE,
     HAPAG_STATES,
+    container_page,
     container_param,
-    listing_url,
+    detail_url,
+    is_real_detail,
+    padded_container,
     parse_movements,
-    rows_from_html,
     to_payload,
 )
 
@@ -642,26 +645,6 @@ class EtaSemanticsTests(unittest.TestCase):
         self.assertIsNone(data.eta)
 
 
-# HTML real del listado legacy: el contenedor viene con DOS espacios porque el
-# servidor los emite para alinear la columna, y el submit los convierte en `++`.
-HAPAG_LISTING_HTML = """
-<table>
-  <tr class="x-grid-row">
-    <td><input type="radio" id="r1" name="row"/></td>
-    <td><span class="nonEditableContent">HLBU  2959982</span></td>
-    <td>40 High Cube</td>
-    <td>Discharged</td>
-  </tr>
-  <tr class="x-grid-row">
-    <td><input type="radio" id="r2" name="row"/></td>
-    <td><span class="nonEditableContent">FTAU  1546275</span></td>
-    <td>20 Dry</td>
-    <td>Loaded</td>
-  </tr>
-  <tr class="x-grid-header"><td>Cabecera sin radio</td></tr>
-</table>
-"""
-
 # Texto de la tabla de movimientos tal como queda en innerText.
 HAPAG_DETAIL_TEXT = """Hapag-Lloyd Tracking
 Container HLBU2959982
@@ -674,27 +657,56 @@ Loaded\tQINGDAO\t2026-09-12\t16:20\tIQUIQUE EXPRESS\t2636E
 """
 
 
-class HapagListingTests(unittest.TestCase):
-    """El listado legacy de Hapag no es JSON: es HTML con radios y celdas.
+# Texto real del detalle servido por `?view=S8510&container=`, medido en el
+# runner. NO trae radios ni boton `Details`: la pagina ya es el detalle.
+HAPAG_DETAIL_HTML = """Skip to main content
+Your cargo, our promise.
+Home
+Tracing by Container
+Container No.
 
-    Se lee del HTML servido y no del DOM porque el número viene relleno con dos
-    espacios (`HLBU  2959982`) y el DOM los colapsa. Esos dos espacios son
-    significativos: el submit los codifica como `++`.
+(e.g. HLCU1234567)
+
+Find		Clear
+Container Information
+Type
+	22GP
+Description
+	GENERAL PURPOSE CONT.
+Dimension
+	20' X 8' X 8'6"
+
+Last Movement
+
+	The container arrived in TLAQUEPAQUE, JAL at 2026-11-12 .
+
+Status	Place of Activity	Date	Time	Transport	Voyage No.
+Gate out empty	QINGDAO	2026-08-22	14:30	Truck	
+Arrival in	QINGDAO	2026-09-03	04:01	Truck	
+Loaded	QINGDAO	2026-09-06	18:11	POSORJA EXPRESS	2633E
+Vessel departed	QINGDAO	2026-09-06	23:54	POSORJA EXPRESS	2633E
+Vessel arrived	BUSAN	2026-09-09	14:54	POSORJA EXPRESS	2633E
+Discharged	BUSAN	2026-09-10	06:14	POSORJA EXPRESS	2633E
+Loaded	BUSAN	2026-09-24	00:50	IQUIQUE EXPRESS	2636E
+Vessel departed	BUSAN	2026-09-25	03:43	IQUIQUE EXPRESS	2636E
+Vessel arrived	MANZANILLO, COL (MX)	2026-10-21	15:00	IQUIQUE EXPRESS	2636E
+Discharged	MANZANILLO, COL (MX)	2026-10-22	20:38	IQUIQUE EXPRESS	2636E
+Departure from	MANZANILLO, COL (MX)	2026-11-01	09:09	Rail	
+Arrival in	GUADALAJARA, JAL	2026-11-04	10:30	Rail	
+Departure from	GUADALAJARA, JAL	2026-11-11	15:33	Truck	
+Gate in empty	TLAQUEPAQUE, JAL	2026-11-12	17:51	Truck	
+"""
+
+
+class HapagDetailUrlTests(unittest.TestCase):
+    """Cómo se llega al detalle de Hapag: URL directa, sin listado.
+
+    El detalle es HTML (no JSON), y el contenedor llega con dos espacios de
+    relleno en la variante por B/L (`HLBU  2959982`), que el sitio codifica
+    como `++`.
     """
 
-    def test_reads_each_row_with_its_container(self):
-        rows = rows_from_html(HAPAG_LISTING_HTML)
-        self.assertEqual([r["container"] for r in rows], ["HLBU2959982", "FTAU1546275"])
-
-    def test_ignores_rows_without_a_radio(self):
-        # La cabecera de la tabla no es seleccionable y no debe entrar.
-        self.assertEqual(len(rows_from_html(HAPAG_LISTING_HTML)), 2)
-
-    def test_keeps_the_two_spaces_of_the_served_html(self):
-        rows = rows_from_html(HAPAG_LISTING_HTML)
-        self.assertEqual(rows[0]["param"], "HLBU++2959982")
-
-    def test_container_param_matches_what_the_form_submits(self):
+    def test_container_param_matches_what_the_site_submits(self):
         self.assertEqual(container_param("HLBU  2959982"), "HLBU++2959982")
 
     def test_single_space_is_a_single_plus(self):
@@ -704,21 +716,63 @@ class HapagListingTests(unittest.TestCase):
     def test_regular_spacing_needs_no_plus(self):
         self.assertEqual(container_param("HLBU2959982"), "HLBU2959982")
 
-    def test_listing_url_by_container_uses_the_legacy_page(self):
-        # El scraper recibe contenedores, no B/L: esta es la ruta normal.
-        url = listing_url("HLBU  2959982")
-        self.assertIn("track-by-container-solution-legacy.html", url)
-        self.assertIn("container=HLBU++2959982", url)
+    def test_detail_url_trae_el_contenedor_y_view(self):
+        """La URL del detalle es navegable: consulta el contenedor pedido.
 
-    def test_listing_url_by_bl_uses_the_verified_page(self):
-        # Variante verificada en produccion. Se deja disponible porque es la
-        # unica que se ha comprobado de punta a punta contra el sitio real.
-        url = listing_url("HLBU2959982", bl="HLCUNG12607EKZE0")
-        self.assertIn("track-by-booking-solution-legacy.html", url)
-        self.assertIn("blno=HLCUNG12607EKZE0", url)
+        Medido en el runner con dos contenedores del mismo B/L: la pagina
+        devuelve tablas distintas (`2026-08-22 14:30` frente a
+        `2026-08-14 06:44`), asi que la URL si aplica el contenedor. Antes se
+        creyo lo contrario por un chequeo invalido (se buscaba el numero en
+        `innerText`, donde no aparece nunca).
 
-    def test_empty_html_gives_no_rows(self):
-        self.assertEqual(rows_from_html(""), [])
+        `view=S8510` es la forma exacta que produce el propio sitio al abrir un
+        detalle, y es la que se usa porque esta medida.
+        """
+        # Siempre con el relleno del sitio: es la forma medida.
+        self.assertEqual(detail_url("HLBU2959982"),
+                         CONTAINER_PAGE + "?view=S8510&container=HLBU++2959982")
+        self.assertEqual(detail_url("HLBU  2959982"),
+                         CONTAINER_PAGE + "?view=S8510&container=HLBU++2959982")
+
+    def test_padded_container_rebuilds_the_site_layout(self):
+        """El número se pide con el relleno del sitio, no compacto.
+
+        Medido: la variante que devolvió el detalle correcto fue
+        `container=HLBU++2959982`. La compacta no se comprobó, así que no se
+        envía.
+        """
+        self.assertEqual(padded_container("HLBU2959982"), "HLBU  2959982")
+        self.assertEqual(container_param(padded_container("HLBU2959982")),
+                         "HLBU++2959982")
+        # Un valor que ya viene relleno no se toca dos veces.
+        self.assertEqual(padded_container("HLBU  2959982"), "HLBU  2959982")
+        # Un número inválido se deja tal cual en vez de inventar relleno.
+        self.assertEqual(padded_container("XYZ"), "XYZ")
+
+    def test_container_page_is_the_detail_entry_point(self):
+        # La pagina de contenedor es la entrada: abrirla con el parametro ya
+        # devuelve el detalle, sin radios ni boton `Details`.
+        self.assertEqual(container_page(), CONTAINER_PAGE)
+
+    def test_detail_page_is_recognised_as_real(self):
+        """El detalle se reconoce por sus estados, no por el largo del texto.
+
+        La shell de la SPA y el detalle legacy pesan igual en bytes; solo se
+        distinguen por la tabla. Este chequeo es el que impide publicar un
+        resultado inventado a partir de una pagina vacia.
+        """
+        self.assertTrue(is_real_detail(HAPAG_DETAIL_HTML))
+        self.assertFalse(is_real_detail("Skip to main content\nYour cargo, our promise."))
+
+    def test_detail_page_has_no_details_button(self):
+        """El fallo de produccion fue esperar un listado que no existe.
+
+        `browser.py` navegaba al detalle y esperaba radios de listado mas un
+        boton `Details` (solo existen en la variante por B/L), asi que todo
+        contenedor acababa en `El listado de Hapag no trajo contenedores`.
+        """
+        self.assertNotIn('value="Details"', HAPAG_DETAIL_HTML)
+        self.assertNotIn('type="radio"', HAPAG_DETAIL_HTML)
 
 
 class HapagMovementsTests(unittest.TestCase):
@@ -884,6 +938,44 @@ class PerCarrierProxyTests(unittest.TestCase):
         self.assertEqual([c.value for c in groups[""]], ["MSC", "MAERSK"])
         self.assertEqual([c.value for c in groups["socks5://127.0.0.1:40000"]],
                          ["HAPAG_LLOYD"])
+
+
+class CapturedPayloadTests(unittest.TestCase):
+    """Cuándo un JSON capturado sirve para responder.
+
+    Medido en el runner: MSC devuelve `GetCountryAgencies` (JSON válido, sin
+    eventos) además de la respuesta de tracking. Ese JSON entraba en la lista de
+    capturados y contaba como "captured", así que nunca se rellenaba el
+    formulario y el contenedor quedaba en TIMEOUT.
+    """
+
+    def _record(self, url, has_events=False, matched=False, priority=0):
+        from tracker.browser import CapturedResponse
+        from tracker.models import Carrier
+        return CapturedResponse(url=url, status=200, content_type="application/json",
+                                body={}, carrier=Carrier.MSC, priority=priority,
+                                has_events=has_events, matched_container=matched)
+
+    def test_useless_json_does_not_count_as_captured(self):
+        from tracker.browser import captured_is_usable
+        noisy = [self._record("https://www.msc.com/api/feature/LocalInformation/GetCountryAgencies")]
+        self.assertFalse(captured_is_usable(noisy))
+
+    def test_json_with_events_counts_as_captured(self):
+        from tracker.browser import captured_is_usable
+        good = [self._record("https://www.msc.com/api/feature/tools/TrackingInfo",
+                             has_events=True, matched=True)]
+        self.assertTrue(captured_is_usable(good))
+
+    def test_json_mentioning_the_container_counts_as_captured(self):
+        # Un 404 semántico de la naviera también sirve: dice "no lo conozco".
+        from tracker.browser import captured_is_usable
+        semantic = [self._record("https://www.maersk.com/api/tracking/x", matched=True)]
+        self.assertTrue(captured_is_usable(semantic))
+
+    def test_empty_list_is_not_usable(self):
+        from tracker.browser import captured_is_usable
+        self.assertFalse(captured_is_usable([]))
 
 
 class ResultOrderTests(unittest.TestCase):
