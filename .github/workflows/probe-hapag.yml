@@ -18,10 +18,10 @@ on:
         required: false
         default: "HLCUNG12607EKZE0"
         type: string
-      wait_seconds:
-        description: "Segundos de espera por ruta (3 rutas)."
+      proxy:
+        description: "SOCKS5 para salir por WARP."
         required: false
-        default: "30"
+        default: "socks5://127.0.0.1:40000"
         type: string
 
 permissions:
@@ -140,14 +140,13 @@ jobs:
       - name: Run Hapag probe
         env:
           BL: ${{ github.event.inputs.bl || 'HLCUNG12607EKZE0' }}
-          WAIT: ${{ github.event.inputs.wait_seconds || '30' }}
+          PROXY: ${{ github.event.inputs.proxy || 'socks5://127.0.0.1:40000' }}
         run: |
           set -uo pipefail
           # `|| true`: un bloqueo es el DATO, no un error de CI.
           xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" \
             python scripts/probe_hapag.py "${BL}" \
-              --proxy socks5://127.0.0.1:40000 \
-              --wait "${WAIT}" \
+              --proxy "${PROXY}" \
               --headed \
               --dump probe-dumps/hapag \
             2>&1 | tee probe-hapag.log || true
@@ -156,8 +155,8 @@ jobs:
             echo "## Probe Hapag (\`${BL}\`)"
             echo ""
             echo '```'
-            grep -E "^(RUTA|URL|  HTTP|  title|  BLOQUEADO|  respuestas|  guardados|  diario)" \
-              probe-hapag.log || echo "(sin líneas de resumen)"
+            grep -E "^(PASO|  \[|     |  HTTP|  title|  BLOQUEADO|RESULTADO)" \
+              probe-hapag.log | head -60 || echo "(sin líneas de resumen)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
