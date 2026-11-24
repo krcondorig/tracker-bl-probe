@@ -38,7 +38,10 @@ permissions:
 jobs:
   probe:
     name: Probe (${{ matrix.route }})
-    runs-on: ubuntu-latest
+    # Ubuntu 26.04 (el nuevo `ubuntu-latest`) no provee `libtss2-tctildr0t64`,
+    # del que depende cloudflare-warp: la instalación falla con
+    # "Unable to satisfy dependencies". 24.04 es la LTS que sí lo tiene.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -85,7 +88,14 @@ jobs:
               | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
             sudo apt-get update -qq
           fi
-          sudo apt-get install -y -qq cloudflare-warp
+          # `--fix-broken` resuelve el caso de libtss2-tctildr0t64 ausente en
+          # imágenes nuevas; si aun así falla, se informa con claridad en vez
+          # de abortar con un error de apt opaco.
+          if ! sudo apt-get install -y -qq --fix-broken cloudflare-warp; then
+            echo "::error::cloudflare-warp no se pudo instalar en $(. /etc/os-release && echo "$PRETTY_NAME")."
+            sudo apt-get install -y -qq libtss2-tctildr0t64 2>&1 | tail -5 || true
+            sudo apt-get install -y -qq cloudflare-warp
+          fi
           warp-cli --version
 
       - name: Connect WARP through SOCKS5
