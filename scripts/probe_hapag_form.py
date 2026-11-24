@@ -1,12 +1,15 @@
-"""Sonda 4 (funcional): la vía por contenedor es el formulario, no la URL.
+"""Sonda 6 (definitiva): consulta por contenedor rellenando el formulario JSF.
 
-Hallazgo previo: `?view=S8510&container=X` devuelve una tabla de movimientos
-pero de OTRO envío (el número pedido no aparece en la página). Es estado rancio
-del servidor, no una consulta. Así que la URL no sirve.
+Estructura real obtenida de la página:
+  form  : #tracing_by_container_f  (POST a ...?_a=tracing_by_container)
+  campo : #tracing_by_container_f:hl12
+  botón : button[value="Find"]  ->  #tracing_by_container_f:hl25
+  banner: #onetrust-accept-btn-handler (tapa el campo; hay que cerrarlo)
 
-La página de contenedor trae su propio formulario ("Tracing by Container",
-campo `Container No.` + botón `Find`). Aquí se rellena de verdad y se comprueba
-si el detalle que aparece es el del contenedor pedido.
+El clic normal expiraba porque un `div.category-menu-switch-handler` queda
+encima del campo. Aquí se cierra el consentimiento, se escribe por JS sin
+hit-testing y se pulsa `Find`. Se comprueba que el detalle sea el del
+contenedor pedido y no el de otro envío.
 
 Temporal: se borra al decidir.
 """
@@ -22,7 +25,6 @@ from camoufox.async_api import AsyncCamoufox
 
 TRACK = "https://www.hapag-lloyd.com/en/online-business/track/"
 CONTAINER_PAGE = TRACK + "track-by-container-solution-legacy.html"
-BOOKING_PAGE = TRACK + "track-by-booking-solution-legacy.html"
 
 TARGET = "HLBU2959982"
 OTHER = "FTAU1546275"
@@ -42,94 +44,17 @@ def movement_rows(text: str) -> list[str]:
     return rows
 
 
-async def form_fields(page) -> list[dict]:
-    """Campos y botones del formulario, para no adivinar selectores."""
-    return await page.evaluate(
-        """() => {
-            const out = [];
-            document.querySelectorAll('input').forEach(el => out.push({
-                tag: 'input', type: el.type, name: el.name, id: el.id,
-                placeholder: el.placeholder || '', visible: !!(el.offsetParent),
-            }));
-            document.querySelectorAll('button, input[type=submit]').forEach(el => out.push({
-                tag: 'button', type: el.type || '', name: el.name, id: el.id,
-                value: el.value || '', text: (el.innerText || '').trim().slice(0, 30),
-                visible: !!(el.offsetParent),
-            }));
-            return out;
-        }"""
-    )
-
-
-async def try_container_form(browser, page_url: str) -> dict:
-    info = {"page": page_url}
-    context = await browser.new_context(locale="es-PE")
-    page = await context.new_page()
-    try:
-        await page.goto(page_url, wait_until="domcontentloaded", timeout=60_000)
-        await page.wait_for_timeout(6000)
-
-        fields = await form_fields(page)
-        info["fields"] = [f for f in fields if f.get("visible")][:20]
-
-        # Localizar el campo del contenedor y el botón Find por sus atributos,
-        # sin depender de un selector concreto que pueda cambiar.
-        locator = None
-        for candidate in ("#containerNo", "input[name*=container i]", "input[id*=container i]",
-                          "input[name*=Container i]"):
-            try:
-                loc = page.locator(candidate).first
-                if await loc.count() and await loc.is_visible():
-                    locator = loc
-                    info["field_selector"] = candidate
-                    break
-            except Exception:  # noqa: BLE001
-                continue
-        if locator is None:
-            info["error"] = "sin campo de contenedor visible"
-            return info
-
-        await locator.click(timeout=8000)
-        await locator.fill("")
-        await locator.type(TARGET, delay=90)
-        await page.wait_for_timeout(500)
-
-        clicked = False
-        for candidate in ("button:has-text('Find')", "input[value='Find']",
-                          "button[value='Find']", "#findBtn"):
-            try:
-                btn = page.locator(candidate).first
-                if await btn.count() and await btn.is_visible():
-                    await btn.click(timeout=8000)
-                    info["find_selector"] = candidate
-                    clicked = True
-                    break
-            except Exception:  # noqa: BLE001
-                continue
-        if not clicked:
-            await locator.press("Enter")
-            info["find_selector"] = "Enter"
-
-        await page.wait_for_timeout(12_000)
-        text = await page.evaluate("() => document.body ? document.body.innerText : ''")
-        info["url_after"] = page.url
-        info["shows_target"] = TARGET in (text or "")
-        info["shows_other"] = OTHER in (text or "")
-        info["rows"] = len(movement_rows(text or ""))
-        info["sample_rows"] = movement_rows(text or "")[:4]
-        info["text_len"] = len(text or "")
-        if TARGET in (text or ""):
-            pos = text.index(TARGET)
-            info["context"] = text[max(0, pos - 150):pos + 100]
-    except Exception as exc:  # noqa: BLE001
-        info["error"] = f"{type(exc).__name__}: {exc}"
-    finally:
+async def dismiss_consent(page) -> bool:
+    for selector in ("#onetrust-accept-btn-handler", "#onetrust-reject-all-handler"):
         try:
-            await page.close()
-            await context.close()
+            btn = page.locator(selector).first
+            if await btn.count() and await btn.is_visible():
+                await btn.click(timeout=5000)
+                await page.wait_for_timeout(1500)
+                return True
         except Exception:  # noqa: BLE001
-            pass
-    return info
+            continue
+    return False
 
 
 async def main() -> int:
@@ -138,29 +63,87 @@ async def main() -> int:
     if proxy:
         options["proxy"] = {"server": proxy}
 
-    results = []
+    info: dict = {"field_value_after_fill": None}
     async with AsyncCamoufox(**options) as browser:
-        for name, url in (("container_page", CONTAINER_PAGE), ("booking_page", BOOKING_PAGE)):
-            print(f"── {name}: {url}", flush=True)
-            info = await try_container_form(browser, url)
-            info["case"] = name
-            results.append(info)
-            print(f"   target={info.get('shows_target')} other={info.get('shows_other')} "
-                  f"rows={info.get('rows')} err={info.get('error')}", flush=True)
-            print(f"   find={info.get('find_selector')} field={info.get('field_selector')} "
-                  f"url_after={info.get('url_after')}", flush=True)
-            for row in info.get("sample_rows", []):
-                print(f"   fila: {row}", flush=True)
-            if info.get("context"):
-                print(f"   ctx: {info['context']!r}", flush=True)
+        context = await browser.new_context(locale="es-PE")
+        page = await context.new_page()
+        try:
+            await page.goto(CONTAINER_PAGE, wait_until="domcontentloaded", timeout=60_000)
+            await page.wait_for_timeout(6000)
+            info["consent_closed"] = await dismiss_consent(page)
+            await page.wait_for_timeout(1500)
 
+            field_sel = "#tracing_by_container_f\\:hl12"
+            await page.wait_for_selector(field_sel, state="attached", timeout=30_000)
+
+            # Escribir por JS: el campo está tapado y el clic real expira.
+            # No se pasa el valor por argumento: dentro de una arrow function
+            # `arguments` no existe, así que se usa una función normal con
+            # parámetro explícito.
+            filled = await page.evaluate(
+                """(value) => {
+                    const el = document.querySelector('#tracing_by_container_f\\\\:hl12');
+                    if (!el) return null;
+                    el.value = '';
+                    el.focus();
+                    el.value = value;
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    el.dispatchEvent(new Event('blur', {bubbles: true}));
+                    return el.value;
+                }""",
+                TARGET,
+            )
+            info["field_value_after_fill"] = filled
+            await page.wait_for_timeout(800)
+
+            # Pulsar Find: es un type=button manejado por ExtJS/JSF.
+            pressed = False
+            try:
+                async with page.expect_navigation(timeout=45_000):
+                    await page.evaluate(
+                        """() => {
+                            const b = document.querySelector('button[value="Find"]');
+                            if (!b) return false;
+                            b.click();
+                            return true;
+                        }"""
+                    )
+                pressed = True
+            except Exception:  # noqa: BLE001 - puede pintar sin navegar
+                await page.wait_for_timeout(10_000)
+                pressed = True
+            info["find_pressed"] = pressed
+
+            await page.wait_for_timeout(10_000)
+            text = await page.evaluate("() => document.body ? document.body.innerText : ''")
+            info["url_after"] = page.url
+            info["shows_target"] = TARGET in (text or "")
+            info["shows_other"] = OTHER in (text or "")
+            info["rows"] = len(movement_rows(text or ""))
+            info["sample_rows"] = movement_rows(text or "")[:6]
+            info["text_len"] = len(text or "")
+            if TARGET in (text or ""):
+                pos = text.index(TARGET)
+                info["context"] = text[max(0, pos - 150):pos + 120]
+            # Guardar el texto para verificar el parser con datos reales.
+            with open("hapag-detail.txt", "w", encoding="utf-8") as handle:
+                handle.write(text or "")
+        except Exception as exc:  # noqa: BLE001
+            info["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            try:
+                await page.close()
+                await context.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    print(json.dumps({k: v for k, v in info.items() if k != "context"}, indent=2,
+                     ensure_ascii=False), flush=True)
+    for row in info.get("sample_rows", []):
+        print(f"  fila: {row}", flush=True)
     with open("hapag-form-probe.json", "w", encoding="utf-8") as handle:
-        json.dump(results, handle, indent=2, ensure_ascii=False)
-
-    print("\nRESUMEN")
-    for info in results:
-        print(f"  {info['case']:<16} target={info.get('shows_target')} "
-              f"rows={info.get('rows')} err={info.get('error')}")
+        json.dump(info, handle, indent=2, ensure_ascii=False)
     return 0
 
 

@@ -89,10 +89,8 @@ jobs:
       - name: Sondar listado
         run: |
           set -o pipefail
-          python scripts/probe_hapag_structure.py socks5://127.0.0.1:40000 \
-            2>&1 | tee probe-structure.log || true
-          # Solo diagnóstico: se publica la estructura completa en el resumen.
-          cat hapag-structure.json 2>/dev/null || true
+          python scripts/probe_hapag_form.py socks5://127.0.0.1:40000 \
+            2>&1 | tee probe-form.log || true
 
       - name: Resumen
         if: always()
@@ -100,7 +98,7 @@ jobs:
           {
             echo "## Sonda Hapag"
             echo '```'
-            sed -n '/──/,$p' probe-structure.log || echo "(sin resumen)"
+            cat probe-form.log || echo "(sin salida)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -109,6 +107,7 @@ jobs:
         with:
           name: hapag-probe
           path: |
-            probe-structure.log
-            hapag-structure.json
+            probe-form.log
+            hapag-form-probe.json
+            hapag-detail.txt
           if-no-files-found: ignore
