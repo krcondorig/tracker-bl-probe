@@ -198,6 +198,38 @@ curl -X POST http://localhost:8080/api/v1/tracking/register \
 curl http://localhost:8080/api/v1/tracking/MSCU1234567
 ```
 
+## Rendimiento: dónde se iba el tiempo
+
+El job con WARP tardaba **18–19 minutos**. Medido con marcas de tiempo dentro de
+cada paso, el reparto era este:
+
+| Paso | Antes | Ahora |
+| --- | --- | --- |
+| Install system dependencies | 219 s | **13 s** |
+| Install Cloudflare WARP | 261–976 s | **10–18 s** |
+| Resto del job | ~100 s | ~100 s |
+| **Job completo** | **640–1119 s** | **172 s** |
+
+Dos causas, ambas de descarga de paquetes, ninguna de código:
+
+1. **`apt-get install cloudflare-warp` tardaba ~820 s de los ~880 s**, y no por
+   `dpkg` (59 s). WARP arrastra 130 paquetes (GUI de webkit, gstreamer,
+   libayatana). `--no-install-recommends` **no** ayuda: son dependencias duras.
+   Solución: cachear los `.deb` (`~/.warp-debs`, 65 archivos, 123 MB) y
+   reinstalarlos desde disco.
+2. **`apt-get install <rutas .deb>` seguía tardando ~250 s** aunque los archivos
+   ya estuvieran en disco, porque resuelve dependencias contra los índices. Con
+   `dpkg -i` baja a segundos. `dpkg` no consulta índices ni red.
+
+`Install system dependencies` (219 s) era el mismo patrón: `apt-get update` +
+descarga. Baja a 13 s cuando el runner ya tiene los índices en caché.
+
+### Sobre `verify-bl.yml` frente a `scraper.yml`
+
+`verify-bl.yml` corre dos jobs en paralelo (directo y WARP) y sirve para
+comprobar el acceso. `scraper.yml` es el de producción. Los dos comparten el
+cache de `.deb` y el de Camoufox.
+
 ## Notas de operación
 
 - **Cron**: `0 13 * * *` = 08:00 en Lima (UTC-5 todo el año). GitHub puede
