@@ -1,27 +1,24 @@
-"""Sonda de Hapag-Lloyd: obtiene el JSON de tracking del endpoint real.
+"""Sonda de Hapag-Lloyd: reproduce el flujo real del detalle por contenedor.
 
-Camino recorrido hasta aquí (para no repetir el trabajo):
+Cómo se llegó aquí (no repetir):
 
-1. Sin WARP, `hapag-lloyd.com` devuelve Managed Challenge: bloqueo por IP.
-2. Con WARP la web carga, pero `?blno=` y el formulario no disparan datos:
-   el formulario hace GET a `/solutions/tracking/#/` (SPA con hash routing).
-3. Minando el bundle JS de la SPA se encontró la llamada real:
+1. Sin WARP, `hapag-lloyd.com` devuelve Managed Challenge: es bloqueo por IP.
+2. Con WARP la web carga, pero `?blno=` y el formulario no disparan el JSON de
+   tracking: la SPA usa rutas hash y llama a una API aparte.
+3. Esa API (`tracking.api.hlag.cloud/api/tracking/v3/events`) falla con
+   "NetworkError" desde `fetch`: CORS.
+4. La vía que sí usa la web es **HTML renderizado en servidor**:
 
-       GET https://tracking.api.hlag.cloud/api/tracking/v{version}/events
-           ?reference=<B/L>
-       header: X-Turnstile-Token   (solo si tracking_turnstile_challenge)
+       track-by-booking-solution.html?view=S8510&container=<CONTENEDOR>
 
-   Con `tracking_backend_version: 3` y `tracking_turnstile_challenge: false`
-   en la config por defecto.
+   `view=S8510` es una constante; `container` sale del listado que aparece al
+   consultar el B/L. Ese es el camino de este probe.
 
-4. `fetch()` desde la página a ese host dio "NetworkError": eso es CORS o
-   DNS, no un 403. Por eso aquí se prueban tres vías distintas y se reporta
-   qué falla en cada una, en vez de asumir.
-
-Vías:
-   A. fetch desde la página          -> sujeto a CORS
-   B. navegación directa (page.goto) -> sin CORS, es un documento
-   C. request del contexto           -> sin CORS, sale por el proxy
+Flujo:
+   A. Consultar el B/L y extraer el listado de contenedores (con sus enlaces
+      "Detalles", que ya traen el contenedor exacto).
+   B. Navegar a la URL de detalle de cada contenedor y volcar el HTML.
+   C. Resumir lo que se ve: buque, viaje, puerto, fechas, llegada.
 
 Uso:
     python scripts/probe_hapag.py HLCUNG12607EKZE0 --proxy socks5://127.0.0.1:40000
@@ -36,22 +33,35 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from camoufox.async_api import AsyncCamoufox  # noqa: E402
 
-SPA_URL = "https://www.hapag-lloyd.com/solutions/tracking/"
-API_BASE = "https://tracking.api.hlag.cloud/api/tracking"
-API_VERSION = "3"  # tracking_backend_version en la config de la SPA
+BOOKING_URL = ("https://www.hapag-lloyd.com/en/online-business/track/"
+               "track-by-booking-solution.html")
+VIEW = "S8510"  # constante del enlace "Detalles"
+
+CONTAINER_RE = re.compile(r"\b([A-Z]{4})[\s+]{0,2}(\d{6})[\s+]{0,2}(\d)\b")
+
+
+def _normalize_container(raw: str) -> str:
+    """Quita separadores de la forma cruda.
+
+    El sitio entrega el contenedor como `HLBU++2959982`: el `+` es un espacio
+    codificado, no parte del número.
+    """
+    return re.sub(r"[^A-Z0-9]", "", raw.upper())
 
 
 async def _dismiss(page) -> None:
     for sel in ("#onetrust-accept-btn-handler",
                 'button[id*="accept" i]',
                 'button:has-text("Accept all")',
-                'button:has-text("Aceptar todo")'):
+                'button:has-text("Aceptar todo")',
+                'button:has-text("Aceptar")'):
         try:
             loc = page.locator(sel).first
             if await loc.count() and await loc.is_visible():
@@ -60,49 +70,130 @@ async def _dismiss(page) -> None:
                 break
         except Exception:
             continue
-
-
-def _json_or_text(body: str) -> Any:
     try:
-        return json.loads(body)
+        await page.evaluate(
+            """() => { for (const id of ['onetrust-consent-sdk',
+                                        'onetrust-banner-sdk',
+                                        'onetrust-pc-sdk']) {
+                           const el = document.getElementById(id);
+                           if (el) el.remove();
+                       } }"""
+        )
     except Exception:
-        return None
+        pass
 
 
-def _report(label: str, status: Any, ctype: str, body: str) -> bool:
-    """Imprime una respuesta y dice si trae datos de tracking."""
-    print(f"     {label}: HTTP {status}  {len(body)}B  {ctype[:35]}")
-    if not body:
-        return False
-    parsed = _json_or_text(body)
-    if parsed is None:
-        print(f"        no-JSON: {' '.join(body.split())[:170]}")
-        return False
-    if isinstance(parsed, dict):
-        print(f"        claves: {list(parsed)[:12]}")
-        groups = parsed.get("groups")
-        if isinstance(groups, list):
-            print(f"        groups: {len(groups)}")
-            for g in groups[:3]:
-                if isinstance(g, dict):
-                    evs = g.get("events") or []
-                    print(f"           container={g.get('containerNumber')!r} "
-                          f"events={len(evs)}")
-                    if evs:
-                        print(f"              primero: {json.dumps(evs[0])[:180]}")
-            if groups:
-                return True
-        if parsed.get("errorKey"):
-            print(f"        errorKey: {parsed['errorKey']!r}")
-    return False
+async def _blocked(page) -> str:
+    try:
+        title = await page.title() or ""
+    except Exception:
+        title = ""
+    if re.search(r"(just a moment|un momento|security check|access denied"
+                 r"|attention required)", title, re.I):
+        return title.strip()[:90]
+    return ""
+
+
+async def _submit_booking(page, bl: str) -> None:
+    """Escribe el B/L y envía. El botón 'Next' es el camino real."""
+    handle = await page.evaluate_handle(
+        """() => {
+            const cands = Array.from(document.querySelectorAll('input'))
+                .filter(el => el.offsetParent !== null &&
+                              !['hidden','checkbox','radio','submit','button']
+                                .includes(el.type));
+            return cands[0] || null;
+        }"""
+    )
+    el = handle.as_element()
+    if el is None:
+        print("  AVISO: no hay campo de texto visible")
+        return
+    ident = await page.evaluate("(e) => e.id || e.placeholder || '?'", el)
+    print(f"  campo: {ident!r}")
+    try:
+        await el.click(timeout=8000)
+        await el.fill("")
+        await el.type(bl, delay=70)
+    except Exception:
+        await el.evaluate(
+            """(e, v) => { e.value = v;
+                 e.dispatchEvent(new Event('input', {bubbles:true}));
+                 e.dispatchEvent(new Event('change', {bubbles:true})); }""",
+            bl)
+    print(f"  B/L escrito: {bl}")
+    clicked = False
+    for sel in ('button:has-text("Next")', 'button:has-text("Siguiente")',
+                'button[type="submit"]'):
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() and await loc.is_visible():
+                await loc.click(timeout=6000)
+                print(f"  click en {sel}")
+                clicked = True
+                break
+        except Exception:
+            continue
+    if not clicked:
+        await el.press("Enter")
+        print("  Enter (no había botón visible)")
+
+
+async def _extract_containers(page) -> list[dict[str, str]]:
+    """Saca los contenedores del listado, con su enlace de detalle real.
+
+    Se prefieren los enlaces porque ya traen el contenedor exactamente como lo
+    espera el servidor (incluida la codificación de espacios).
+    """
+    try:
+        raw = await page.evaluate(
+            """() => Array.from(document.querySelectorAll('a[href]'))
+                    .map(a => ({href: a.href, text: (a.innerText || '').trim()}))
+                    .filter(a => /[?&]container=/.test(a.href))"""
+        )
+    except Exception:
+        raw = []
+
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw or []:
+        href = item.get("href") or ""
+        m = re.search(r"[?&]container=([^&]+)", href)
+        if not m:
+            continue
+        cont = m.group(1)
+        if cont in seen:
+            continue
+        seen.add(cont)
+        out.append({"container_param": cont, "href": href,
+                    "label": (item.get("text") or "")[:40]})
+
+    if out:
+        return out
+
+    # Sin enlaces: buscar números de contenedor en el texto de la página.
+    try:
+        text = await page.evaluate(
+            "() => document.body ? document.body.innerText : ''")
+    except Exception:
+        text = ""
+    for m in CONTAINER_RE.finditer(text or ""):
+        cont = _normalize_container(m.group(0))
+        if cont in seen:
+            continue
+        seen.add(cont)
+        out.append({"container_param": cont, "href": "", "label": "(del texto)"})
+    return out
 
 
 async def main() -> int:
-    ap = argparse.ArgumentParser(description="Consulta el endpoint de tracking de Hapag.")
+    ap = argparse.ArgumentParser(description="Flujo de detalle por contenedor de Hapag.")
     ap.add_argument("bl", help="B/L o booking de Hapag")
     ap.add_argument("--proxy", default="", help="Proxy SOCKS5, p. ej. socks5://127.0.0.1:40000")
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--dump", default="probe-dumps/hapag", help="Carpeta de salida")
+    ap.add_argument("--max-containers", type=int, default=2,
+                    help="Cuántos contenedores volcar con detalle.")
     args = ap.parse_args()
 
     bl = re.sub(r"[^A-Z0-9]", "", args.bl.upper())
@@ -111,12 +202,12 @@ async def main() -> int:
 
     launch: dict[str, Any] = dict(headless=not args.headed, geoip=True,
                                   locale="es-PE", os="windows", humanize=True,
-                                  window=(1440, 900))
+                                  window=(1440, 1000))
     if args.proxy:
         launch["proxy"] = {"server": args.proxy}
 
-    api_url = f"{API_BASE}/v{API_VERSION}/events?reference={bl}"
-    success = False
+    containers: list[dict[str, str]] = []
+    detail_ok = False
 
     try:
         async with AsyncCamoufox(**launch) as browser:
@@ -124,119 +215,105 @@ async def main() -> int:
             page.set_default_timeout(90_000)
             page.on("dialog", lambda d: asyncio.create_task(d.accept()))
 
+            # ---------------------------------------------------------------
+            # A. Listado del B/L
+            # ---------------------------------------------------------------
             print("=" * 78)
-            print("PASO 0: cargar la SPA (contexto + pasar el challenge)")
+            print(f"PASO A: consultar B/L {bl}")
             print("=" * 78)
-            resp = await page.goto(SPA_URL, wait_until="domcontentloaded")
+            resp = await page.goto(BOOKING_URL, wait_until="domcontentloaded")
             print(f"  HTTP {resp.status if resp else '?'}")
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(3500)
             await _dismiss(page)
-            title = await page.title() or ""
-            print(f"  title: {title[:70]!r}")
-            if re.search(r"(just a moment|un momento|security check|access denied)",
-                         title, re.I):
-                print("  BLOQUEADO: revisa el proxy/WARP.")
+            bloqueo = await _blocked(page)
+            if bloqueo:
+                print(f"  BLOQUEADO: {bloqueo}")
+                print("  revisa --proxy / WARP")
                 await page.close()
                 return 1
 
-            # -- Diagnóstico de red: distinguir CORS de falta de salida ------
-            print("\n" + "=" * 78)
-            print("PASO 1: diagnóstico (¿hay red? ¿es CORS?)")
-            print("=" * 78)
-            diag = await page.evaluate(
-                """async () => {
-                    const probe = async (u) => {
-                        try {
-                            const r = await fetch(u, {mode: 'no-cors'});
-                            return 'opaque-ok status=' + r.status;
-                        } catch (e) { return 'FAIL ' + String(e).slice(0, 60); }
-                    };
-                    const out = {};
-                    out.ipify_no_cors = await probe('https://api.ipify.org');
-                    out.hlag_no_cors = await probe('https://tracking.api.hlag.cloud/api/tracking/v3/events');
-                    return out;
-                }"""
-            )
-            print(f"  fetch no-cors a api.ipify.org  -> {diag.get('ipify_no_cors')}")
-            print(f"  fetch no-cors a hlag.cloud     -> {diag.get('hlag_no_cors')}")
+            await _submit_booking(page, bl)
+            await page.wait_for_timeout(6000)
 
-            # -- Vía B: navegación directa (sin CORS) -----------------------
-            print("\n" + "=" * 78)
-            print("PASO 2: vía B — navegar a la URL de la API")
-            print("=" * 78)
-            print(f"  {api_url}")
+            # La SPA puede tardar; se espera a que aparezca algún contenedor.
+            containers = []
+            for i in range(20):
+                containers = await _extract_containers(page)
+                if containers:
+                    print(f"  listado listo tras {(i + 1) * 2}s")
+                    break
+                await page.wait_for_timeout(2000)
+
+            print(f"  URL tras consultar: {page.url}")
+            print(f"  contenedores encontrados: {len(containers)}")
+            for c in containers[:15]:
+                print(f"     {c['container_param']:<20} label={c['label']!r}")
+                if c["href"]:
+                    print(f"        {c['href'][:130]}")
+
+            (dump / f"listado-{bl}.json").write_text(
+                json.dumps(containers, ensure_ascii=False, indent=1),
+                encoding="utf-8")
             try:
-                r = await page.goto(api_url, wait_until="domcontentloaded",
-                                    timeout=60_000)
-                status = r.status if r else "?"
-                ctype = ""
-                body = ""
-                if r is not None:
-                    try:
-                        ctype = (r.headers or {}).get("content-type", "")
-                    except Exception:
-                        pass
-                    try:
-                        body = await r.text()
-                    except Exception:
-                        body = await page.evaluate(
-                            "() => document.body ? document.body.innerText : ''")
-                if not body:
-                    body = await page.evaluate(
-                        "() => document.body ? document.body.innerText : ''")
-                success = _report("via-B", status, ctype, body)
-                (dump / f"viaB-{bl}.txt").write_text(
-                    f"status={status}\nctype={ctype}\n\n{body}", encoding="utf-8")
-            except Exception as exc:
-                print(f"     via-B ERROR: {type(exc).__name__}: {str(exc)[:150]}")
+                (dump / f"listado-{bl}.txt").write_text(
+                    await page.evaluate(
+                        "() => document.body ? document.body.innerText : ''"),
+                    encoding="utf-8")
+            except Exception:
+                pass
 
-            # -- Vía C: request del contexto (sin CORS, por el proxy) --------
-            if not success:
-                print("\n" + "=" * 78)
-                print("PASO 3: vía C — request del contexto del navegador")
-                print("=" * 78)
-                for label, url in (
-                    ("C-v3", api_url),
-                    ("C-v3-token", api_url),
-                ):
-                    headers = {}
-                    if label.endswith("token"):
-                        headers["X-Turnstile-Token"] = ""
-                    try:
-                        r = await page.request.get(url, headers=headers, timeout=60_000)
-                        body = await r.text()
-                        ok = _report(label, r.status, r.headers.get("content-type", ""), body)
-                        (dump / f"viaC-{bl}-{label}.txt").write_text(
-                            f"status={r.status}\n\n{body}", encoding="utf-8")
-                        if ok:
-                            success = True
-                            break
-                    except Exception as exc:
-                        print(f"     {label} ERROR: {type(exc).__name__}: {str(exc)[:150]}")
+            # ---------------------------------------------------------------
+            # B. Detalle por contenedor
+            # ---------------------------------------------------------------
+            print("\n" + "=" * 78)
+            print("PASO B: detalle por contenedor (view=S8510)")
+            print("=" * 78)
 
-            # -- Vía A: fetch desde la página, ya sabiendo si es CORS --------
-            if not success:
-                print("\n" + "=" * 78)
-                print("PASO 4: vía A — fetch desde la página")
-                print("=" * 78)
+            if not containers:
+                print("  sin contenedores: se prueba la URL de detalle con el B/L")
+                targets = [{"container_param": bl, "href": "", "label": "(B/L)"}]
+            else:
+                targets = containers[:args.max_containers]
+
+            for idx, c in enumerate(targets):
+                param = c["container_param"]
+                url = (c["href"] or
+                       f"{BOOKING_URL}?view={VIEW}&container={quote(param)}")
+                print(f"\n  [{idx + 1}/{len(targets)}] {param}")
+                print(f"     {url[:140]}")
                 try:
-                    res = await page.goto(SPA_URL, wait_until="domcontentloaded")
-                    await page.wait_for_timeout(2500)
-                    out = await page.evaluate(
-                        """async (u) => {
-                            try {
-                                const r = await fetch(u, {headers: {'Accept': 'application/json'}});
-                                const t = await r.text();
-                                return {status: r.status, len: t.length, body: t.slice(0, 100000)};
-                            } catch (e) { return {error: String(e)}; }
-                        }""", api_url)
-                    if out.get("error"):
-                        print(f"     via-A ERROR: {out['error'][:140]}")
-                    else:
-                        success = _report("via-A", out.get("status"), "",
-                                          out.get("body") or "")
+                    r = await page.goto(url, wait_until="domcontentloaded",
+                                        timeout=90_000)
+                    print(f"     HTTP {r.status if r else '?'}")
+                    await page.wait_for_timeout(5000)
+                    await _dismiss(page)
+                    b = await _blocked(page)
+                    if b:
+                        print(f"     BLOQUEADO: {b}")
+                        continue
+                    await page.wait_for_timeout(3000)
+
+                    html = await page.content()
+                    text = await page.evaluate(
+                        "() => document.body ? document.body.innerText : ''")
+                    safe = re.sub(r"[^A-Za-z0-9]+", "-", param)[:28]
+                    (dump / f"detalle-{safe}.html").write_text(html, encoding="utf-8")
+                    (dump / f"detalle-{safe}.txt").write_text(text, encoding="utf-8")
+                    print(f"     HTML {len(html) // 1024}KB, texto {len(text)}B "
+                          f"-> detalle-{safe}.txt")
+
+                    # Resumen legible de lo que hay en la página.
+                    flat = " ".join(text.split())
+                    print(f"     texto: {flat[:280]}")
+                    for kw in ("Vessel", "Buque", "Voyage", "Viaje", "ETA",
+                               "Arrival", "Llegada", "Discharge", "Descarga",
+                               "MANZANILLO", "Manzanillo"):
+                        if kw.lower() in flat.lower():
+                            print(f"     contiene {kw!r}")
+                    if "HLBU" in flat or param[:4] in flat:
+                        detail_ok = True
                 except Exception as exc:
-                    print(f"     via-A ERROR: {type(exc).__name__}: {str(exc)[:150]}")
+                    print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
 
             await page.close()
     except Exception as exc:
@@ -247,9 +324,10 @@ async def main() -> int:
         raise
 
     print("\n" + "=" * 78)
-    print("RESULTADO:", "DATOS OBTENIDOS" if success else "sin datos")
+    print(f"RESULTADO: {len(containers)} contenedores, "
+          f"detalle {'OK' if detail_ok else 'sin datos'}")
     print("=" * 78)
-    return 0 if success else 2
+    return 0 if containers else 2
 
 
 if __name__ == "__main__":

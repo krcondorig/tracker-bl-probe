@@ -23,6 +23,11 @@ on:
         required: false
         default: "socks5://127.0.0.1:40000"
         type: string
+      max_containers:
+        description: "Cuántos contenedores volcar con detalle."
+        required: false
+        default: "2"
+        type: string
 
 permissions:
   contents: read
@@ -141,6 +146,7 @@ jobs:
         env:
           BL: ${{ github.event.inputs.bl || 'HLCUNG12607EKZE0' }}
           PROXY: ${{ github.event.inputs.proxy || 'socks5://127.0.0.1:40000' }}
+          MAXC: ${{ github.event.inputs.max_containers || '2' }}
         run: |
           set -uo pipefail
           # `|| true`: un bloqueo es el DATO, no un error de CI.
@@ -148,6 +154,7 @@ jobs:
             python scripts/probe_hapag.py "${BL}" \
               --proxy "${PROXY}" \
               --headed \
+              --max-containers "${MAXC}" \
               --dump probe-dumps/hapag \
             2>&1 | tee probe-hapag.log || true
 
@@ -155,7 +162,7 @@ jobs:
             echo "## Probe Hapag (\`${BL}\`)"
             echo ""
             echo '```'
-            grep -E "^(PASO|  \[|     |  HTTP|  title|  BLOQUEADO|RESULTADO)" \
+            grep -E "^(PASO|  \[|     |  HTTP|  title|  BLOQUEADO|  contenedores|  listado|RESULTADO)" \
               probe-hapag.log | head -60 || echo "(sin líneas de resumen)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
