@@ -361,17 +361,24 @@ async def _wait_containers(page, seconds: int = 25) -> tuple[list[dict[str, str]
     return [], last_html, last_text
 
 
+MOVEMENT_STATES = (
+    "Gate out empty", "Gate in empty", "Gate out full", "Gate in full",
+    "Arrival in", "Departure from", "Loaded", "Discharged",
+    "Vessel departed", "Vessel arrived",
+)
+
+
 def _has_data(text: str, container: str) -> bool:
     """Dice si la página es un detalle real y no la shell de la SPA.
 
-    La shell de la nueva SPA mide ~990 caracteres y nunca menciona el
-    contenedor. Un detalle de verdad trae la tabla de eventos, el buque y el
-    viaje, y pasa de 1500 caracteres.
+    Se cuenta filas de movimiento en vez de medir la longitud del texto: la
+    shell de la SPA nueva y la página de detalle legacy pesan lo mismo en
+    bytes (se diferencian por el contenido, no por el tamaño). Un detalle real
+    trae al menos dos estados de la tabla de movimientos.
     """
     flat = " ".join((text or "").split())
-    if len(flat) < 1500:
-        return False
-    return container[:4].upper() in flat.upper()
+    found = sum(1 for st in MOVEMENT_STATES if st.lower() in flat.lower())
+    return found >= 2
 
 
 async def _detail_by_click(page, bl: str, index: int):
@@ -387,12 +394,14 @@ async def _detail_by_click(page, bl: str, index: int):
     """
     listing_url = f"{LEGACY}?blno={bl}"
     try:
-        # Asegurar que estamos en el listado.
-        if "track-by-booking-solution-legacy" not in page.url:
-            await page.goto(listing_url, wait_until="domcontentloaded",
-                            timeout=90_000)
-            await page.wait_for_timeout(3000)
-            await _dismiss(page)
+        # Volver SIEMPRE al listado: tras el primer detalle la URL sigue
+        # conteniendo "track-by-booking-solution-legacy", así que comprobar
+        # solo el nombre de la página dejaría el formulario sin sus radios y
+        # el segundo contenedor fallaría con "no existe el radio 1".
+        await page.goto(listing_url, wait_until="domcontentloaded",
+                        timeout=90_000)
+        await page.wait_for_timeout(3500)
+        await _dismiss(page)
 
         picked = await page.evaluate(
             """(idx) => {
