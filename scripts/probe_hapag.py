@@ -1,6 +1,6 @@
 """Sonda de Hapag-Lloyd: obtiene el JSON de tracking del endpoint real.
 
-Historia de por qué existe este script (el camino hasta aquí):
+Camino recorrido hasta aquí (para no repetir el trabajo):
 
 1. Sin WARP, `hapag-lloyd.com` devuelve Managed Challenge: bloqueo por IP.
 2. Con WARP la web carga, pero `?blno=` y el formulario no disparan datos:
@@ -8,15 +8,20 @@ Historia de por qué existe este script (el camino hasta aquí):
 3. Minando el bundle JS de la SPA se encontró la llamada real:
 
        GET https://tracking.api.hlag.cloud/api/tracking/v{version}/events
-       params: reference=<B/L>            (más turnstileToken si aplica)
-       header: X-Turnstile-Token         (solo si hay challenge)
+           ?reference=<B/L>
+       header: X-Turnstile-Token   (solo si tracking_turnstile_challenge)
 
-   La versión sale de la config (`tracking_backend_version: 3`) y el flag
-   `tracking_turnstile_challenge: false` dice que, por defecto, no hay
-   challenge en la API.
+   Con `tracking_backend_version: 3` y `tracking_turnstile_challenge: false`
+   en la config por defecto.
 
-Este script ataca ese endpoint directamente, desde dentro del navegador
-(que es quien tiene el contexto y la IP buena de WARP), y guarda la respuesta.
+4. `fetch()` desde la página a ese host dio "NetworkError": eso es CORS o
+   DNS, no un 403. Por eso aquí se prueban tres vías distintas y se reporta
+   qué falla en cada una, en vez de asumir.
+
+Vías:
+   A. fetch desde la página          -> sujeto a CORS
+   B. navegación directa (page.goto) -> sin CORS, es un documento
+   C. request del contexto           -> sin CORS, sale por el proxy
 
 Uso:
     python scripts/probe_hapag.py HLCUNG12607EKZE0 --proxy socks5://127.0.0.1:40000
@@ -38,9 +43,8 @@ sys.path.insert(0, str(ROOT))
 from camoufox.async_api import AsyncCamoufox  # noqa: E402
 
 SPA_URL = "https://www.hapag-lloyd.com/solutions/tracking/"
-BOOKING_URL = ("https://www.hapag-lloyd.com/en/online-business/track/"
-               "track-by-booking-solution.html")
 API_BASE = "https://tracking.api.hlag.cloud/api/tracking"
+API_VERSION = "3"  # tracking_backend_version en la config de la SPA
 
 
 async def _dismiss(page) -> None:
@@ -56,68 +60,24 @@ async def _dismiss(page) -> None:
                 break
         except Exception:
             continue
+
+
+def _json_or_text(body: str) -> Any:
     try:
-        await page.evaluate(
-            """() => { for (const id of ['onetrust-consent-sdk',
-                                        'onetrust-banner-sdk',
-                                        'onetrust-pc-sdk']) {
-                           const el = document.getElementById(id);
-                           if (el) el.remove();
-                       } }"""
-        )
+        return json.loads(body)
     except Exception:
-        pass
-
-
-async def _api_call(page, url: str, bl: str) -> dict[str, Any] | None:
-    """Llama al endpoint desde dentro de la página (contexto del navegador).
-
-    Llamar desde la página y no desde httpx importa: así la petición sale con
-    la IP de WARP, el User-Agent del navegador y las cookies del dominio, que
-    es exactamente lo que hace la SPA real.
-    """
-    try:
-        result = await page.evaluate(
-            """async ({url, bl}) => {
-                const sep = url.includes('?') ? '&' : '?';
-                const full = url + sep + 'reference=' + encodeURIComponent(bl);
-                try {
-                    const r = await fetch(full, {
-                        method: 'GET',
-                        credentials: 'include',
-                        headers: {'Accept': 'application/json'}
-                    });
-                    const text = await r.text();
-                    return {status: r.status, ctype: r.headers.get('content-type') || '',
-                            len: text.length, body: text.slice(0, 200000)};
-                } catch (e) {
-                    return {error: String(e)};
-                }
-            }""",
-            {"url": url, "bl": bl},
-        )
-    except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
-    return result
-
-
-def _summarize(label: str, res: dict[str, Any]) -> dict[str, Any] | None:
-    """Imprime el resultado de una llamada y devuelve el JSON si es válido."""
-    if res.get("error"):
-        print(f"     {label}: ERROR {res['error'][:130]}")
         return None
-    status = res.get("status")
-    body = res.get("body") or ""
-    print(f"     {label}: HTTP {status}  {res.get('len', 0)}B  "
-          f"{res.get('ctype', '')[:35]}")
+
+
+def _report(label: str, status: Any, ctype: str, body: str) -> bool:
+    """Imprime una respuesta y dice si trae datos de tracking."""
+    print(f"     {label}: HTTP {status}  {len(body)}B  {ctype[:35]}")
     if not body:
-        return None
-    try:
-        parsed = json.loads(body)
-    except Exception:
-        snippet = " ".join(body.split())[:160]
-        print(f"        no-JSON: {snippet}")
-        return None
+        return False
+    parsed = _json_or_text(body)
+    if parsed is None:
+        print(f"        no-JSON: {' '.join(body.split())[:170]}")
+        return False
     if isinstance(parsed, dict):
         print(f"        claves: {list(parsed)[:12]}")
         groups = parsed.get("groups")
@@ -125,13 +85,16 @@ def _summarize(label: str, res: dict[str, Any]) -> dict[str, Any] | None:
             print(f"        groups: {len(groups)}")
             for g in groups[:3]:
                 if isinstance(g, dict):
+                    evs = g.get("events") or []
                     print(f"           container={g.get('containerNumber')!r} "
-                          f"events={len(g.get('events') or [])}")
-                    for ev in (g.get("events") or [])[:2]:
-                        print(f"              {ev}")
+                          f"events={len(evs)}")
+                    if evs:
+                        print(f"              primero: {json.dumps(evs[0])[:180]}")
+            if groups:
+                return True
         if parsed.get("errorKey"):
             print(f"        errorKey: {parsed['errorKey']!r}")
-    return parsed
+    return False
 
 
 async def main() -> int:
@@ -152,24 +115,17 @@ async def main() -> int:
     if args.proxy:
         launch["proxy"] = {"server": args.proxy}
 
-    # Variantes: la version que declara la config es 3, pero conviene saber
-    # si las demas responden igual (util si cambian de version sin avisar).
-    variants = [
-        ("v3", f"{API_BASE}/v3/events"),
-        ("v2", f"{API_BASE}/v2/events"),
-        ("v1", f"{API_BASE}/v1/events"),
-        ("sin-version", f"{API_BASE}/events"),
-    ]
+    api_url = f"{API_BASE}/v{API_VERSION}/events?reference={bl}"
+    success = False
 
-    found: dict[str, Any] | None = None
     try:
         async with AsyncCamoufox(**launch) as browser:
             page = await browser.new_page()
-            page.set_default_timeout(60_000)
+            page.set_default_timeout(90_000)
             page.on("dialog", lambda d: asyncio.create_task(d.accept()))
 
             print("=" * 78)
-            print("PASO 1: cargar la SPA (para tener contexto y pasar el challenge)")
+            print("PASO 0: cargar la SPA (contexto + pasar el challenge)")
             print("=" * 78)
             resp = await page.goto(SPA_URL, wait_until="domcontentloaded")
             print(f"  HTTP {resp.status if resp else '?'}")
@@ -179,53 +135,108 @@ async def main() -> int:
             print(f"  title: {title[:70]!r}")
             if re.search(r"(just a moment|un momento|security check|access denied)",
                          title, re.I):
-                print("  BLOQUEADO en la SPA: revisa el proxy/WARP.")
+                print("  BLOQUEADO: revisa el proxy/WARP.")
                 await page.close()
                 return 1
 
+            # -- Diagnóstico de red: distinguir CORS de falta de salida ------
             print("\n" + "=" * 78)
-            print("PASO 2: llamar al endpoint de tracking")
+            print("PASO 1: diagnóstico (¿hay red? ¿es CORS?)")
             print("=" * 78)
-            for label, url in variants:
-                print(f"\n  [{label}] {url}")
-                res = await _api_call(page, url, bl)
-                parsed = _summarize(label, res or {})
-                if parsed and isinstance(parsed.get("groups"), list) and parsed["groups"]:
-                    found = parsed
-                    (dump / f"hapag-{bl}-{label}.json").write_text(
-                        json.dumps(parsed, ensure_ascii=False, indent=1),
-                        encoding="utf-8")
-                    print(f"     -> DATOS: guardado hapag-{bl}-{label}.json")
-                    break
-                if parsed is not None:
-                    (dump / f"hapag-{bl}-{label}.json").write_text(
-                        json.dumps(parsed, ensure_ascii=False, indent=1),
-                        encoding="utf-8")
+            diag = await page.evaluate(
+                """async () => {
+                    const probe = async (u) => {
+                        try {
+                            const r = await fetch(u, {mode: 'no-cors'});
+                            return 'opaque-ok status=' + r.status;
+                        } catch (e) { return 'FAIL ' + String(e).slice(0, 60); }
+                    };
+                    const out = {};
+                    out.ipify_no_cors = await probe('https://api.ipify.org');
+                    out.hlag_no_cors = await probe('https://tracking.api.hlag.cloud/api/tracking/v3/events');
+                    return out;
+                }"""
+            )
+            print(f"  fetch no-cors a api.ipify.org  -> {diag.get('ipify_no_cors')}")
+            print(f"  fetch no-cors a hlag.cloud     -> {diag.get('hlag_no_cors')}")
 
-            if not found:
+            # -- Vía B: navegación directa (sin CORS) -----------------------
+            print("\n" + "=" * 78)
+            print("PASO 2: vía B — navegar a la URL de la API")
+            print("=" * 78)
+            print(f"  {api_url}")
+            try:
+                r = await page.goto(api_url, wait_until="domcontentloaded",
+                                    timeout=60_000)
+                status = r.status if r else "?"
+                ctype = ""
+                body = ""
+                if r is not None:
+                    try:
+                        ctype = (r.headers or {}).get("content-type", "")
+                    except Exception:
+                        pass
+                    try:
+                        body = await r.text()
+                    except Exception:
+                        body = await page.evaluate(
+                            "() => document.body ? document.body.innerText : ''")
+                if not body:
+                    body = await page.evaluate(
+                        "() => document.body ? document.body.innerText : ''")
+                success = _report("via-B", status, ctype, body)
+                (dump / f"viaB-{bl}.txt").write_text(
+                    f"status={status}\nctype={ctype}\n\n{body}", encoding="utf-8")
+            except Exception as exc:
+                print(f"     via-B ERROR: {type(exc).__name__}: {str(exc)[:150]}")
+
+            # -- Vía C: request del contexto (sin CORS, por el proxy) --------
+            if not success:
                 print("\n" + "=" * 78)
-                print("PASO 3: el endpoint no devolvió grupos; probar vía formulario")
+                print("PASO 3: vía C — request del contexto del navegador")
                 print("=" * 78)
-                await page.goto(BOOKING_URL, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2500)
-                await _dismiss(page)
+                for label, url in (
+                    ("C-v3", api_url),
+                    ("C-v3-token", api_url),
+                ):
+                    headers = {}
+                    if label.endswith("token"):
+                        headers["X-Turnstile-Token"] = ""
+                    try:
+                        r = await page.request.get(url, headers=headers, timeout=60_000)
+                        body = await r.text()
+                        ok = _report(label, r.status, r.headers.get("content-type", ""), body)
+                        (dump / f"viaC-{bl}-{label}.txt").write_text(
+                            f"status={r.status}\n\n{body}", encoding="utf-8")
+                        if ok:
+                            success = True
+                            break
+                    except Exception as exc:
+                        print(f"     {label} ERROR: {type(exc).__name__}: {str(exc)[:150]}")
+
+            # -- Vía A: fetch desde la página, ya sabiendo si es CORS --------
+            if not success:
+                print("\n" + "=" * 78)
+                print("PASO 4: vía A — fetch desde la página")
+                print("=" * 78)
                 try:
-                    handle = await page.evaluate_handle(
-                        """() => Array.from(document.querySelectorAll('input'))
-                            .filter(el => el.offsetParent !== null &&
-                                          !['hidden','checkbox','radio']
-                                            .includes(el.type))[0] || null"""
-                    )
-                    el = handle.as_element()
-                    if el is not None:
-                        await el.click(timeout=5000)
-                        await el.fill("")
-                        await el.type(bl, delay=70)
-                        await el.press("Enter")
-                        await page.wait_for_timeout(6000)
-                        print(f"  URL tras Enter: {page.url}")
+                    res = await page.goto(SPA_URL, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(2500)
+                    out = await page.evaluate(
+                        """async (u) => {
+                            try {
+                                const r = await fetch(u, {headers: {'Accept': 'application/json'}});
+                                const t = await r.text();
+                                return {status: r.status, len: t.length, body: t.slice(0, 100000)};
+                            } catch (e) { return {error: String(e)}; }
+                        }""", api_url)
+                    if out.get("error"):
+                        print(f"     via-A ERROR: {out['error'][:140]}")
+                    else:
+                        success = _report("via-A", out.get("status"), "",
+                                          out.get("body") or "")
                 except Exception as exc:
-                    print(f"  formulario falló: {type(exc).__name__}")
+                    print(f"     via-A ERROR: {type(exc).__name__}: {str(exc)[:150]}")
 
             await page.close()
     except Exception as exc:
@@ -236,9 +247,9 @@ async def main() -> int:
         raise
 
     print("\n" + "=" * 78)
-    print("RESULTADO:", "datos obtenidos" if found else "sin datos")
+    print("RESULTADO:", "DATOS OBTENIDOS" if success else "sin datos")
     print("=" * 78)
-    return 0 if found else 2
+    return 0 if success else 2
 
 
 if __name__ == "__main__":
