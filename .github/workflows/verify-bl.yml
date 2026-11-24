@@ -85,6 +85,11 @@ jobs:
       - name: Instalar Cloudflare WARP
         run: |
           set -euo pipefail
+          # Marcas de tiempo por fase: `apt-get update -qq` es silencioso y sin
+          # esto no se sabe si el tiempo se va en el update, en la descarga de
+          # los .deb o en dpkg.
+          t0=$(date +%s)
+          mark() { echo "[tiempo] $1: $(( $(date +%s) - t0 ))s"; }
           # cloudflare-warp no está en los repos de Ubuntu: hay que añadir el
           # suyo, o `apt-get install cloudflare-warp` responde
           # "Unable to locate package".
@@ -93,10 +98,12 @@ jobs:
           CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" \
             | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+          mark "repo configurado"
           # Update completo: libtss2-tctildr0t64 vive en el pocket `security` y
           # un update restringido al repo de WARP lo deja sin candidato.
           sudo apt-get update -qq
-          if ! sudo apt-get install -y -qq cloudflare-warp; then
+          mark "apt-get update"
+          if ! sudo apt-get install -y -qq -o Acquire::Retries=3 cloudflare-warp; then
             echo "::warning::cloudflare-warp no instaló a la primera; se inspecciona la dependencia."
             apt-cache policy libtss2-tctildr0t64 || true
             sudo apt-get install -y -qq libtss2-tctildr0t64 \
@@ -104,6 +111,7 @@ jobs:
               || true
             sudo apt-get install -y -qq -f cloudflare-warp
           fi
+          mark "apt-get install"
           warp-cli --version
 
       - name: Conectar WARP por SOCKS5
@@ -147,7 +155,9 @@ jobs:
           BL_HAPAG: HLCUNG12607EKZE0
         run: |
           set -o pipefail
-          python scripts/check_bl.py MEDUADP85690 275792562 "$BL_HAPAG" \
+          # Solo Hapag: es la única que necesita WARP. MSC y Maersk corren en el
+          # job "directo" y meterlas aquí solo alargaba el job lento.
+          python scripts/check_bl.py "$BL_HAPAG" \
             --proxy "$PROXY" 2>&1 | tee check-warp.log || true
 
       - name: Resumen

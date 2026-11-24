@@ -863,8 +863,13 @@ async def main() -> int:
     parser.add_argument("--dump", default="", help="Carpeta donde guardar el JSON crudo")
     parser.add_argument(
         "--proxy", default="",
-        help="Proxy SOCKS5/HTTP para la sesión, p. ej. socks5://127.0.0.1:40000 (WARP). "
-             "Necesario para Hapag-Lloyd: bloquea por reputación de IP, no por fingerprint.")
+        help="Proxy SOCKS5/HTTP, p. ej. socks5://127.0.0.1:40000 (WARP). "
+             "Por defecto solo se usa en Hapag-Lloyd, que bloquea por reputación "
+             "de IP; MSC y Maersk van directos porque el proxy los degrada.")
+    parser.add_argument(
+        "--proxy-all", action="store_true",
+        help="Forzar el proxy también para MSC y Maersk (útil si la IP del "
+             "runner empieza a estar bloqueada en esas dos).")
     args = parser.parse_args()
 
     if args.dump:
@@ -884,24 +889,40 @@ async def main() -> int:
 
     note = "Revisa con --headed para ver qué carga la página."
 
-    # Camoufox 0.5.x inyecta el fingerprint en el lanzamiento: el proxy debe ir
-    # en las opciones del navegador, no por contexto.
-    launch: dict[str, Any] = dict(headless=not args.headed, geoip=True, locale="es-PE",
-                                  os="windows", humanize=True, window=(1440, 900))
-    if args.proxy:
-        launch["proxy"] = {"server": args.proxy}
-        launch["geoip"] = True
+    # El proxy va POR NAVIERA, no global. Camoufox lo fija en el lanzamiento, así
+    # que hay que abrir un navegador por configuración.
+    #
+    # Por qué: MSC y Maersk responden bien desde la IP del runner, y meterlos por
+    # WARP los degrada (MSC falló de forma intermitente al salir por WARP en las
+    # pruebas). Hapag, en cambio, bloquea por reputación de IP y necesita WARP.
+    # Aplicar el proxy a los tres era la causa de ese fallo intermitente.
+    groups: dict[bool, list[tuple[str, str]]] = {}
+    for carrier, number in pending:
+        use_proxy = bool(args.proxy) and (args.proxy_all or carrier == "HAPAG_LLOYD")
+        groups.setdefault(use_proxy, []).append((carrier, number))
 
-    async with _browser(launch) as browser:
-        for carrier, number in pending:
-            report = await query(browser, number, carrier, args.port, args.wait * 1000, note)
-            print_report(report)
-            if args.dump and report.raw:
-                target = Path(args.dump) / f"{carrier.lower()}-{number}.json"
-                target.write_text(json.dumps(report.raw, ensure_ascii=False, indent=2),
-                                  encoding="utf-8")
-                print(f"  payload crudo: {target}")
-            await asyncio.sleep(2)
+    for use_proxy, items in groups.items():
+        launch: dict[str, Any] = dict(headless=not args.headed, geoip=True,
+                                      locale="es-PE", os="windows", humanize=True,
+                                      window=(1440, 900))
+        if use_proxy:
+            launch["proxy"] = {"server": args.proxy}
+
+        etiqueta = f"WARP ({args.proxy})" if use_proxy else "sin proxy"
+        print(f"\n  --- navegador {etiqueta} ---")
+
+        async with _browser(launch) as browser:
+            for carrier, number in items:
+                report = await query(browser, number, carrier, args.port,
+                                     args.wait * 1000, note)
+                print_report(report)
+                if args.dump and report.raw:
+                    target = Path(args.dump) / f"{carrier.lower()}-{number}.json"
+                    target.write_text(
+                        json.dumps(report.raw, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+                    print(f"  payload crudo: {target}")
+                await asyncio.sleep(2)
 
     return 0
 
