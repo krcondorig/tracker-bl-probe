@@ -58,19 +58,23 @@ MSC = CarrierAdapter(
     url_markers=("msc.com",),
     path_hints=("/api/", "tracking", "shipment", "track-a-shipment"),
     input_selectors=(
-        'input[name="trackingNumber"]',
+        # Medido en el sitio real: el campo es `#trackingNumber` y tiene el
+        # atributo `name` VACIO, asi que `input[name="trackingNumber"]` no
+        # existe. Era la causa de que MSC acabara siempre en TIMEOUT.
+        "#trackingNumber",
         'input[id*="tracking" i]',
         'input[placeholder*="container" i]',
         'input[placeholder*="contenedor" i]',
+        'input[placeholder*="bill of lading" i]',
         'input[type="search"]',
-        'input[type="text"]',
     ),
     submit_selectors=(
-        'button[type="submit"]',
+        # No se usa `button[type="submit"]`: el primer submit de la pagina no es
+        # el buscador y lleva al login de myMSC (medido). La busqueda se dispara
+        # con `Enter` en el campo, que es lo que hace `check_bl.py`.
         'button[data-test*="track" i]',
         'button:has-text("Track")',
         'button:has-text("Rastrear")',
-        'button:has-text("Search")',
     ),
     result_selectors=(
         "table tbody tr",

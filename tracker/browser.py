@@ -531,7 +531,14 @@ class BrowserSession:
         return None
 
     async def _fallback_form(self, page: Page, adapter: CarrierAdapter, container: str) -> None:
-        """Relleno del formulario de búsqueda como segundo intento."""
+        """Relleno del formulario de búsqueda como segundo intento.
+
+        El `click` real puede expirar (banner de cookies encima o campo tapado),
+        y antes eso hacía `continue`: se pasaba al siguiente selector **sin
+        rellenar nunca**, así que el respaldo no servía para nada y MSC acababa
+        en TIMEOUT. Ahora un clic fallido solo activa el foco por JS, que no
+        pasa por hit-testing, y el relleno continúa igual.
+        """
         if not adapter.needs_form_interaction:
             return
         for selector in adapter.input_selectors:
@@ -539,19 +546,45 @@ class BrowserSession:
                 field = page.locator(selector).first
                 if not await field.count() or not await field.is_visible():
                     continue
+            except Exception:  # noqa: BLE001
+                continue
+
+            # El clic es opcional: sirve para enfocar, no para decidir.
+            try:
                 await field.click(timeout=3000)
+            except Exception:  # noqa: BLE001 - campo tapado: foco por JS
+                try:
+                    await field.evaluate("el => el.focus()")
+                except Exception:  # noqa: BLE001
+                    pass
+
+            try:
                 await field.fill("")
                 await field.type(container, delay=90)
-                await page.wait_for_timeout(400)
-                for submit in adapter.submit_selectors:
+            except Exception:  # noqa: BLE001 - el input no acepta teclado
+                try:
+                    await field.evaluate(
+                        """(el, v) => {
+                            el.value = v;
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                            el.dispatchEvent(new Event('change', {bubbles: true}));
+                        }""",
+                        container,
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
+
+            await page.wait_for_timeout(400)
+            for submit in adapter.submit_selectors:
+                try:
                     button = page.locator(submit).first
-                    try:
-                        if await button.count() and await button.is_visible():
-                            await button.click(timeout=3000)
-                            log.debug("Formulario enviado con %s", submit)
-                            return
-                    except Exception:  # noqa: BLE001
-                        continue
+                    if await button.count() and await button.is_visible():
+                        await button.click(timeout=3000)
+                        log.debug("Formulario enviado con %s", submit)
+                        return
+                except Exception:  # noqa: BLE001
+                    continue
+            try:
                 await field.press("Enter")
                 log.debug("Formulario enviado con Enter en %s", selector)
                 return

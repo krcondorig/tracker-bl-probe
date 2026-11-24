@@ -940,6 +940,37 @@ class PerCarrierProxyTests(unittest.TestCase):
                          ["HAPAG_LLOYD"])
 
 
+class MscFormTests(unittest.TestCase):
+    """El buscador de MSC: el campo no tiene `name`, solo `id`.
+
+    Medido en local contra el sitio real: el input es
+    `<input id="trackingNumber" name="" placeholder="Enter a Container/Bill of
+    Lading Number">`. El adaptador buscaba `input[name="trackingNumber"]`, que
+    no existe, asi que el formulario nunca se rellenaba y todo contenedor de MSC
+    acababa en TIMEOUT. Rellenar `#trackingNumber` si dispara
+    `POST /api/feature/tools/TrackingInfo`.
+    """
+
+    def test_msc_first_selector_targets_the_real_field(self):
+        from tracker.carriers import MSC
+        self.assertEqual(MSC.input_selectors[0], "#trackingNumber")
+
+    def test_msc_does_not_rely_on_a_name_attribute(self):
+        # `input[name="trackingNumber"]` no existe en la pagina real.
+        from tracker.carriers import MSC
+        self.assertNotIn('input[name="trackingNumber"]', MSC.input_selectors)
+
+    def test_msc_never_submits_a_bare_submit_button(self):
+        """Pulsar el primer `button[type=submit]` lleva al login de myMSC.
+
+        Medido: el primer submit de la pagina no es el buscador; al pulsarlo la
+        navegacion acaba en `mscciam.b2clogin.com`. La busqueda se dispara con
+        `Enter` en el campo, que es lo que hace `check_bl.py`.
+        """
+        from tracker.carriers import MSC
+        self.assertNotIn('button[type="submit"]', MSC.submit_selectors)
+
+
 class CapturedPayloadTests(unittest.TestCase):
     """Cuándo un JSON capturado sirve para responder.
 
