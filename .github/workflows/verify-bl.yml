@@ -72,7 +72,6 @@ jobs:
           name: check-directo
           path: |
             check-directo.log
-            probe-dumps/
           if-no-files-found: ignore
 
   warp:
@@ -242,5 +241,4 @@ jobs:
           name: check-warp
           path: |
             check-warp.log
-            probe-dumps/
           if-no-files-found: ignore
