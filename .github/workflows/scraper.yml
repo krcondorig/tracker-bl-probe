@@ -103,16 +103,16 @@ jobs:
           CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" \
             | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
-          if ! sudo apt-get update -qq -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/cloudflare-client.list -o Dir::Etc::sourceparts=-; then
-            echo "::warning::Repositorio WARP sin soporte para '${CODENAME}'; usando 'any'."
-            echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ any main" \
-              | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
-            sudo apt-get update -qq
-          fi
-          if ! sudo apt-get install -y -qq --fix-broken cloudflare-warp; then
-            echo "::error::cloudflare-warp no se pudo instalar en $(. /etc/os-release && echo "$PRETTY_NAME")."
-            sudo apt-get install -y -qq libtss2-tctildr0t64 2>&1 | tail -5 || true
-            sudo apt-get install -y -qq cloudflare-warp
+          # Update completo: la dependencia libtss2-tctildr0t64 está en el
+          # pocket `security`, que un update parcial no refresca.
+          sudo apt-get update -qq
+          if ! sudo apt-get install -y -qq cloudflare-warp; then
+            echo "::warning::cloudflare-warp no instaló a la primera; se inspecciona la dependencia."
+            apt-cache policy libtss2-tctildr0t64 || true
+            sudo apt-get install -y -qq libtss2-tctildr0t64 \
+              || sudo apt-get install -y -qq libtss2-tctildr0 \
+              || true
+            sudo apt-get install -y -qq -f cloudflare-warp
           fi
           warp-cli --version
 
