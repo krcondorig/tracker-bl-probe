@@ -349,42 +349,6 @@ async def _container_in_row(cells: list[str]) -> str:
     return ""
 
 
-async def _click_details(page, row_index: int) -> bool:
-    """Selecciona el radio de la fila y pulsa Details (submit JSF real)."""
-    try:
-        info = await page.evaluate(
-            """(idx) => {
-                const radios = Array.from(document.querySelectorAll(
-                    'input[type=radio][name]'));
-                const r = radios[idx];
-                if (!r) return null;
-                r.click();
-                const label = document.querySelector(`label[for="${r.id}"]`);
-                if (label) label.click();
-                return {id: r.id, checked: r.checked};
-            }""", row_index)
-        if not info:
-            print(f"     no existe el radio {row_index}")
-            return False
-        print(f"     radio {info['id']!r} checked={info['checked']}")
-    except Exception as exc:
-        print(f"     no se pudo marcar el radio: {type(exc).__name__}")
-        return False
-
-    for sel in ('button[value="Details"]', 'button:has-text("Details")',
-                'input[value="Details"]'):
-        try:
-            loc = page.locator(sel).first
-            if await loc.count():
-                await loc.click(timeout=15000)
-                print(f"     click {sel}")
-                return True
-        except Exception:
-            continue
-    print("     no se encontró el botón Details")
-    return False
-
-
 async def _wait_containers(page, seconds: int = 25) -> tuple[list[dict[str, str]], str, str]:
     """Espera a que aparezca al menos un contenedor en el DOM."""
     last_html, last_text = "", ""
@@ -395,6 +359,95 @@ async def _wait_containers(page, seconds: int = 25) -> tuple[list[dict[str, str]
         if found:
             return found, last_html, last_text
     return [], last_html, last_text
+
+
+def _has_data(text: str, container: str) -> bool:
+    """Dice si la página es un detalle real y no la shell de la SPA.
+
+    La shell de la nueva SPA mide ~990 caracteres y nunca menciona el
+    contenedor. Un detalle de verdad trae la tabla de eventos, el buque y el
+    viaje, y pasa de 1500 caracteres.
+    """
+    flat = " ".join((text or "").split())
+    if len(flat) < 1500:
+        return False
+    return container[:4].upper() in flat.upper()
+
+
+async def _detail_by_click(page, bl: str, index: int):
+    """Abre el detalle pulsando `Details` sobre el listado, como un humano.
+
+    Por qué así: el botón `Details` es `type="button"` y lo maneja JS de la
+    página legacy (ExtJS), que envía un POST JSF a
+    `track-by-booking-solution-legacy.html?_a=tracing_by_booking` con el
+    `javax.faces.ViewState` de la sesión. Componer la URL a mano no reproduce
+    ese estado y devuelve la shell de la SPA nueva.
+
+    Se vuelve al listado al terminar para no arrastrar estado sucio.
+    """
+    listing_url = f"{LEGACY}?blno={bl}"
+    try:
+        # Asegurar que estamos en el listado.
+        if "track-by-booking-solution-legacy" not in page.url:
+            await page.goto(listing_url, wait_until="domcontentloaded",
+                            timeout=90_000)
+            await page.wait_for_timeout(3000)
+            await _dismiss(page)
+
+        picked = await page.evaluate(
+            """(idx) => {
+                const radios = Array.from(document.querySelectorAll(
+                    'input[type=radio][name]'));
+                const r = radios[idx];
+                if (!r) return null;
+                r.click();
+                const label = document.querySelector(`label[for="${r.id}"]`);
+                if (label) label.click();
+                return {id: r.id, checked: r.checked, total: radios.length};
+            }""",
+            index,
+        )
+        if not picked:
+            print(f"     no existe el radio {index}")
+            return None
+        print(f"     radio {picked['id']!r} checked={picked['checked']} "
+              f"(de {picked['total']})")
+
+        before = page.url
+        try:
+            async with page.expect_navigation(timeout=45_000):
+                clicked = await page.evaluate(
+                    """() => {
+                        const b = document.querySelector(
+                            'button[value="Details"]');
+                        if (!b) return false;
+                        b.click();
+                        return true;
+                    }"""
+                )
+            print(f"     click Details={clicked}")
+        except Exception as exc:
+            print(f"     sin navegación tras Details ({type(exc).__name__})")
+            # Puede abrir una pestaña nueva o pintar en la misma página.
+            await page.wait_for_timeout(8000)
+
+        await page.wait_for_timeout(5000)
+        await _dismiss(page)
+        print(f"     URL detalle: {page.url[:150]}")
+
+        if page.url == before:
+            print("     la URL no cambió: el detalle se pinta en la misma página")
+
+        b = await _blocked(page)
+        if b:
+            print(f"     BLOQUEADO: {b}")
+            return None
+
+        html, text = await _html(page)
+        return html, text, "click-details"
+    except Exception as exc:
+        print(f"     ERROR clic Details: {type(exc).__name__}: {str(exc)[:140]}")
+        return None
 
 
 async def main() -> int:
@@ -496,23 +549,38 @@ async def main() -> int:
                     print(f"\n  [{idx + 1}/{len(containers)}] {c['container']}")
                     print(f"     celdas: {c.get('cells', '')[:110]}")
                     print(f"     param : {param!r}")
-                    if not param:
-                        print("     sin parámetro: no se puede pedir el detalle")
-                        continue
-                    # URL exactamente como la genera el submit del formulario.
-                    url = f"{BOOKING}?view={VIEW}&container={param}"
-                    print(f"     {url}")
-                    try:
-                        r = await page.goto(url, wait_until="domcontentloaded",
-                                            timeout=90_000)
-                        print(f"     HTTP {r.status if r else '?'}")
-                        await page.wait_for_timeout(6000)
-                        await _dismiss(page)
-                        b = await _blocked(page)
-                        if b:
-                            print(f"     BLOQUEADO: {b}")
-                            continue
-                        html, text = await _html(page)
+
+                    # El listado vive en la página LEGACY (ExtJS). El submit de
+                    # `Details` es un POST de JSF a `-legacy.html`, no una URL
+                    # que se pueda componer: por eso se clica de verdad. La URL
+                    # manual solo se deja como respaldo comprobable.
+                    got = await _detail_by_click(page, bl, idx)
+                    if got:
+                        html, text, used = got
+                        detail_ok = detail_ok or _has_data(text, c["container"])
+                        print(f"     vía: {used}")
+
+                    if not got and param:
+                        url = f"{LEGACY}?view={VIEW}&container={param}"
+                        print(f"     respaldo: {url}")
+                        try:
+                            r = await page.goto(url, wait_until="domcontentloaded",
+                                                timeout=90_000)
+                            print(f"     HTTP {r.status if r else '?'}")
+                            await page.wait_for_timeout(6000)
+                            await _dismiss(page)
+                            b = await _blocked(page)
+                            if b:
+                                print(f"     BLOQUEADO: {b}")
+                                continue
+                            html, text = await _html(page)
+                            got = (html, text, "url-legacy")
+                            detail_ok = detail_ok or _has_data(text, c["container"])
+                        except Exception as exc:
+                            print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
+
+                    if got:
+                        html, text, _used = got
                         flat = " ".join(text.split())
                         print(f"     HTML {len(html) // 1024}KB, texto {len(text)}B")
                         print(f"     texto: {flat[:400]}")
@@ -525,12 +593,6 @@ async def main() -> int:
                                 if k.lower() in flat.lower()]
                         if hits:
                             print(f"     términos de tracking: {hits}")
-                        # El detalle real lista eventos y menciona el contenedor.
-                        if c["container"][:4].lower() in flat.lower() and len(text) > 1500:
-                            detail_ok = True
-                            print("     -> detalle con datos")
-                    except Exception as exc:
-                        print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
 
             await page.close()
     except Exception as exc:
