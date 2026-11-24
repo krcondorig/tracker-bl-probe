@@ -140,8 +140,11 @@ async def _containers_from_page(page, html: str, text: str) -> list[dict[str, st
         if not cont or cont in seen:
             continue
         seen.add(cont)
+        raw = row.get("rawContainer") or ""
         found.append({
             "container": cont,
+            "param": _container_param(raw) if raw else "",
+            "raw": raw,
             "row": str(idx),
             "radio": row.get("radioId") or "",
             "cells": " | ".join(cells)[:120],
@@ -161,8 +164,8 @@ async def _containers_from_page(page, html: str, text: str) -> list[dict[str, st
         if not cont or cont in seen:
             continue
         seen.add(cont)
-        found.append({"container": cont, "row": "", "radio": "",
-                      "href": href, "source": "href"})
+        found.append({"container": cont, "param": cm.group(1), "raw": cm.group(1),
+                      "row": "", "radio": "", "href": href, "source": "href"})
 
     # 3) texto visible
     if not found:
@@ -171,7 +174,8 @@ async def _containers_from_page(page, html: str, text: str) -> list[dict[str, st
             if not cont or cont in seen:
                 continue
             seen.add(cont)
-            found.append({"container": cont, "row": "", "radio": "",
+            found.append({"container": cont, "param": _container_param(m.group(0)),
+                          "raw": m.group(0), "row": "", "radio": "",
                           "source": "text"})
     return found
 
@@ -229,6 +233,11 @@ async def _rows_from_page(page) -> list[dict[str, Any]]:
     envía el radio seleccionado y el servidor responde con la URL
     `?view=S8510&container=<CONT>`. Por eso construir esa URL a mano devuelve
     la shell vacía: falta el estado del formulario.
+
+    El contenedor se muestra rellenado con espacios (`HLBU  2959982`, dos
+    espacios). Al enviar, esos espacios se codifican como `++`, y esa es la
+    forma que espera el servidor: `...&container=HLBU++2959982`. Por eso se
+    guarda el texto crudo de la celda, no solo el número normalizado.
     """
     try:
         rows = await page.evaluate(
@@ -239,10 +248,25 @@ async def _rows_from_page(page) -> list[dict[str, Any]]:
                 for (const r of radios) {
                     const tr = r.closest('tr');
                     if (!tr) continue;
-                    const cells = Array.from(tr.querySelectorAll('td'))
-                        .map(td => (td.innerText || '').trim());
+                    const tds = Array.from(tr.querySelectorAll('td'));
+                    const cells = tds.map(td => (td.innerText || '').trim());
+                    // Texto crudo de la celda que trae el contenedor.
+                    // Se usa `textContent` y no `innerText`: `innerText`
+                    // refleja el render y colapsa los espacios múltiples, y
+                    // aquí los DOS espacios son significativos porque el
+                    // submit los convierte en `++`, parte del parámetro.
+                    let rawContainer = '';
+                    for (const td of tds) {
+                        const t = td.textContent || '';
+                        if (/[A-Z]{4}\s*\d{6}\s*\d/.test(t)) {
+                            rawContainer = t.replace(/[\r\n\t]/g, ' ')
+                                             .replace(/^\s+|\s+$/g, '');
+                            break;
+                        }
+                    }
                     out.push({radioId: r.id, radioName: r.name,
-                              radioValue: r.value, cells: cells});
+                              radioValue: r.value, cells: cells,
+                              rawContainer: rawContainer});
                 }
                 return out;
             }"""
@@ -250,6 +274,17 @@ async def _rows_from_page(page) -> list[dict[str, Any]]:
         return rows or []
     except Exception:
         return []
+
+
+def _container_param(raw: str) -> str:
+    """Convierte el texto de la celda a la forma del parámetro del sitio.
+
+    `HLBU  2959982` -> `HLBU++2959982`
+
+    Cada espacio se vuelve `+`, que es exactamente lo que produce el submit del
+    formulario. No se usa `quote()` porque este escaparía el `+` a `%2B`.
+    """
+    return raw.replace(" ", "+")
 
 
 async def _container_in_row(cells: list[str]) -> str:
@@ -403,19 +438,22 @@ async def main() -> int:
                 print("  sin contenedores: no hay detalle que pedir.")
             else:
                 for idx, c in enumerate(containers[:args.max_containers]):
-                    row = c.get("row") or ""
+                    param = c.get("param") or ""
                     print(f"\n  [{idx + 1}/{len(containers)}] {c['container']}")
-                    print(f"     fila: {row}  celdas: {c.get('cells', '')[:100]}")
-                    if row == "":
-                        print("     sin índice de fila: no se puede operar el JSF")
+                    print(f"     celdas: {c.get('cells', '')[:110]}")
+                    print(f"     param : {param!r}")
+                    if not param:
+                        print("     sin parámetro: no se puede pedir el detalle")
                         continue
+                    # URL exactamente como la genera el submit del formulario.
+                    url = f"{BOOKING}?view={VIEW}&container={param}"
+                    print(f"     {url}")
                     try:
-                        ok = await _click_details(page, int(row))
-                        if not ok:
-                            continue
-                        await page.wait_for_timeout(7000)
-                        # El submit navega a ?view=S8510&container=...
-                        print(f"     URL: {page.url[:150]}")
+                        r = await page.goto(url, wait_until="domcontentloaded",
+                                            timeout=90_000)
+                        print(f"     HTTP {r.status if r else '?'}")
+                        await page.wait_for_timeout(6000)
+                        await _dismiss(page)
                         b = await _blocked(page)
                         if b:
                             print(f"     BLOQUEADO: {b}")
@@ -433,13 +471,10 @@ async def main() -> int:
                                 if k.lower() in flat.lower()]
                         if hits:
                             print(f"     términos de tracking: {hits}")
+                        # El detalle real lista eventos y menciona el contenedor.
                         if c["container"][:4].lower() in flat.lower() and len(text) > 1500:
                             detail_ok = True
                             print("     -> detalle con datos")
-                        # Volver al listado para la siguiente fila.
-                        await page.go_back(wait_until="domcontentloaded")
-                        await page.wait_for_timeout(3500)
-                        await _dismiss(page)
                     except Exception as exc:
                         print(f"     ERROR: {type(exc).__name__}: {str(exc)[:150]}")
 
