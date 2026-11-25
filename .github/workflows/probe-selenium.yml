@@ -137,9 +137,11 @@ jobs:
           set -euo pipefail
           echo "Chrome: $(google-chrome --version || chromium --version || echo desconocido)"
           # Headful necesita pantalla; el runner no tiene, xvfb la simula.
+          # `exec:java` no compila por sí solo: se pide `compile` explícito, o
+          # falla con ClassNotFoundException.
           xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" \
             mvn -B -ntp -f probe-selenium/pom.xml \
-            exec:java -Dexec.mainClass=probe.Probe \
+            compile exec:java -Dexec.mainClass=probe.Probe \
             2>&1 | tee probe.log
         env:
           PROBE_PROXY: "socks5://127.0.0.1:40000"
