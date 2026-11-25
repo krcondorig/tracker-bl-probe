@@ -1,0 +1,246 @@
+name: Soak WARP (estabilidad de la IP)
+
+# TEMPORAL: responde la pregunta que la sonda de 2 s no puede responder.
+#
+# La sonda 45557036641 probó que WARP deja pasar Cloudflare en Hapag. Pero el
+# cron real dura 15-25 min con pausas de 6-12 s. WARP es un túnel de Cloudflare:
+# puede rebalancear la salida o reconectarse a mitad de un run, y si la IP
+# cambia con una sesión de navegador abierta, esa sesión muere.
+#
+# Este workflow corre el código REAL del tracker en bucle durante ~20 min
+# mientras muestrea la IP de egreso cada 30 s.
+#
+# Se borra al decidir.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Duración del soak en minutos."
+        required: false
+        default: "20"
+        type: string
+      containers:
+        description: "Contenedores separados por comas (uno por naviera)."
+        required: false
+        default: "CAIU3430650,MRKU7779494,HLBU2959982"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak-warp
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    name: Soak WARP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCRAPER_LOG_LEVEL: INFO
+      SCRAPER_CARRIERS: MSC,MAERSK,HAPAG_LLOYD
+      SCRAPER_PROXY: socks5://127.0.0.1:40000
+      SCRAPER_PROXY_CARRIERS: HAPAG_LLOYD
+      SCRAPER_DELAY_MIN: "6"
+      SCRAPER_DELAY_MAX: "12"
+      SCRAPER_WAIT_SECONDS: "25"
+      SCRAPER_MAX_ATTEMPTS: "2"
+      SCRAPER_NAV_TIMEOUT_MS: "60000"
+      SCRAPER_DRY_RUN: "true"
+      SOAK_MINUTES: ${{ github.event.inputs.minutes || '20' }}
+      SOAK_CONTAINERS: ${{ github.event.inputs.containers || 'CAIU3430650,MRKU7779494,HLBU2959982' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            xvfb dbus-x11 libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 \
+            libxtst6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+            libgbm1 libpango-1.0-0 libcairo2 libatk1.0-0 libatk-bridge2.0-0 \
+            libasound2t64 libnss3 libnspr4 fonts-liberation fonts-noto-color-emoji \
+            2>/dev/null || sudo apt-get install -y -qq --no-install-recommends \
+            xvfb dbus-x11 libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 \
+            libxtst6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+            libgbm1 libpango-1.0-0 libcairo2 libatk1.0-0 libatk-bridge2.0-0 \
+            libasound2 libnss3 libnspr4 fonts-liberation
+          echo "xvfb: $(xvfb-run --help >/dev/null 2>&1 && echo ok || echo missing)"
+
+      - name: Cache WARP .deb packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.warp-debs
+          key: warp-debs-${{ runner.os }}-v1
+
+      - name: Install Cloudflare WARP
+        run: |
+          set -euo pipefail
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+            | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+          sudo apt-get update -qq
+
+          CACHE_DEBS="$HOME/.warp-debs"
+          mkdir -p "$CACHE_DEBS"
+          if compgen -G "$CACHE_DEBS/*.deb" > /dev/null; then
+            echo "Instalando $(ls -1 "$CACHE_DEBS"/*.deb | wc -l) .deb desde el cache"
+            sudo dpkg -i "$CACHE_DEBS"/*.deb >/dev/null 2>&1 \
+              || sudo apt-get install -y -qq --no-install-recommends -f || true
+          fi
+
+          if ! sudo apt-get install -y -qq --no-install-recommends \
+               -o Acquire::Retries=3 cloudflare-warp; then
+            echo "::warning::cloudflare-warp no instaló a la primera"
+            apt-cache policy libtss2-tctildr0t64 || true
+            sudo apt-get install -y -qq --no-install-recommends libtss2-tctildr0t64 \
+              || sudo apt-get install -y -qq --no-install-recommends libtss2-tctildr0 \
+              || true
+            sudo apt-get install -y -qq --no-install-recommends -f cloudflare-warp
+          fi
+
+          if compgen -G "/var/cache/apt/archives/*.deb" > /dev/null; then
+            cp -n /var/cache/apt/archives/*.deb "$CACHE_DEBS/" 2>/dev/null || true
+          fi
+          warp-cli --version
+
+      - name: Connect WARP through SOCKS5 proxy
+        run: |
+          set -euo pipefail
+          if ! sudo systemctl enable --now warp-svc 2>/dev/null; then
+            sudo nohup warp-svc >/tmp/warp-svc.log 2>&1 &
+          fi
+          for i in $(seq 1 30); do
+            if warp-cli --accept-tos status >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
+            warp-cli --accept-tos registration new
+          fi
+          warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos proxy port 40000
+          warp-cli --accept-tos connect
+          for i in $(seq 1 40); do
+            STATE="$(warp-cli --accept-tos status 2>/dev/null || echo unknown)"
+            echo "warp status: ${STATE}"
+            case "$STATE" in
+              *Connected*|*"Proxy"*) break ;;
+            esac
+            sleep 2
+          done
+
+      - name: Verify egress IP through proxy
+        run: |
+          set -euo pipefail
+          DIRECT_IP="$(curl -s --max-time 15 https://api.ipify.org || echo unreachable)"
+          PROXY_IP="$(curl -s --max-time 25 --socks5-hostname 127.0.0.1:40000 https://api.ipify.org || echo unreachable)"
+          echo "IP directa del runner : ${DIRECT_IP}"
+          echo "IP a través de WARP   : ${PROXY_IP}"
+          if [ "${PROXY_IP}" = "unreachable" ]; then
+            echo "::error::El proxy SOCKS5 no responde: el soak no mediría nada."
+            exit 1
+          fi
+
+      # ------------------------------------------------------------------ #
+      # Monitor de IP en segundo plano: una muestra cada 30 s.
+      # Escribe "epoch<TAB>ip<TAB>estado-warp" para que el resumen lo lea.
+      # ------------------------------------------------------------------ #
+      - name: Start IP monitor
+        run: |
+          set -euo pipefail
+          rm -f ip-monitor.log
+          (
+            while true; do
+              IP="$(curl -s --max-time 20 --socks5-hostname 127.0.0.1:40000 https://api.ipify.org || echo unreachable)"
+              STATE="$(warp-cli --accept-tos status 2>/dev/null | head -1 || echo unknown)"
+              printf '%s\t%s\t%s\n' "$(date +%s)" "$IP" "$STATE" >> ip-monitor.log
+              sleep 30
+            done
+          ) &
+          echo "monitor pid: $!"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Cache Camoufox browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Ensure Camoufox browser
+        run: python scripts/ensure_camoufox.py
+
+      # ------------------------------------------------------------------ #
+      # Bucle del scraper REAL: sin --containers fijo entre iteraciones, sin
+      # backend (dry-run), con el proxy por naviera tal como irá en producción.
+      # ------------------------------------------------------------------ #
+      - name: Soak loop
+        run: |
+          set -euo pipefail
+          DEADLINE=$(( $(date +%s) + SOAK_MINUTES * 60 ))
+          RUN=0
+          rm -f soak-resultados-*.json
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            RUN=$((RUN + 1))
+            echo ""
+            echo "=========== iteracion ${RUN} ($(date -u +%H:%M:%S)) ==========="
+            set +e
+            xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" \
+              python scraper.py \
+                --containers "$SOAK_CONTAINERS" \
+                --output "soak-resultados-${RUN}.json" \
+                --dry-run
+            RC=$?
+            set -e
+            echo "iteracion ${RUN} salio con codigo ${RC}"
+            # Pausa para no martillar las navieras entre iteraciones.
+            sleep 15
+          done
+          echo "soak terminado tras ${RUN} iteraciones"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Soak WARP"
+            echo ""
+            echo '```'
+            python scripts/soak_summary.py 2>&1 || echo "resumen fallo"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python scripts/soak_summary.py 2>&1 || true
+
+      - name: WARP diagnostics
+        if: always()
+        run: |
+          warp-cli --accept-tos status || true
+          warp-cli --accept-tos settings || true
+          sudo journalctl -u warp-svc --no-pager -n 40 || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-warp
+          path: |
+            ip-monitor.log
+            soak-resultados-*.json
+          if-no-files-found: ignore
