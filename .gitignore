@@ -25,3 +25,6 @@ backend/target/
 .vscode/
 *.iml
 .DS_Store
+
+# Build de la sonda temporal
+probe-selenium/target/
