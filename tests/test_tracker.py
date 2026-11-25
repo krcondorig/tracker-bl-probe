@@ -965,6 +965,41 @@ class MscFormTests(unittest.TestCase):
         self.assertNotIn('button[type="submit"]', MSC.submit_selectors)
 
 
+class FormFirstTests(unittest.TestCase):
+    """Navieras cuyo deep link no sirve: se rellena el formulario primero.
+
+    Medido con el codigo real (DEBUG, contenedor CAIU3430650):
+
+        02:36:11.912  GetCountryAgencies capturado (0 eventos)
+        02:36:43.577  Formulario enviado con Enter   <- 31.7 s despues
+        02:36:43.969  TrackingInfo capturado (8 eventos)
+
+    El deep link `?trackingNumber=` de MSC no dispara el XHR, asi que el primer
+    bucle de espera consumia los 25 s completos de `wait_seconds` sin que nada
+    fuera a llegar, y solo despues se rellenaba el formulario. Son ~25 s tirados
+    por contenedor: con 40 contenedores es casi todo el job.
+
+    Si la naviera no dispara nada al navegar, el formulario debe ir primero.
+    """
+
+    def test_msc_fills_the_form_before_waiting(self):
+        from tracker.carriers import MSC
+        self.assertTrue(
+            MSC.form_first,
+            "MSC necesita form_first: su deep link no dispara el XHR",
+        )
+
+    def test_maersk_does_not_need_form_first(self):
+        """El deep link de Maersk si dispara el XHR solo (medido: 2.3 s)."""
+        from tracker.carriers import MAERSK
+        self.assertFalse(MAERSK.form_first)
+
+    def test_hapag_does_not_need_form_first(self):
+        """Hapag va por URL de detalle directa, sin formulario."""
+        from tracker.carriers import HAPAG_LLOYD
+        self.assertFalse(HAPAG_LLOYD.form_first)
+
+
 class CapturedPayloadTests(unittest.TestCase):
     """Cuándo un JSON capturado sirve para responder.
 

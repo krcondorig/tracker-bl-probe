@@ -372,22 +372,36 @@ class BrowserSession:
 
             # Espera activa: en cuanto hay un payload con eventos y el contenedor
             # aparece en él, se puede cortar la espera.
-            deadline = asyncio.get_running_loop().time() + self._settings.wait_seconds
-            while asyncio.get_running_loop().time() < deadline:
-                if await self._best_so_far(captured, container):
-                    break
-                await asyncio.sleep(0.5)
-
-            if not captured_is_usable(captured):
-                # Respaldo: rellenar el formulario cuando el deep link no dispara
-                # el XHR. No basta `if not captured`: MSC contesta JSON inútil
-                # (GetCountryAgencies) y el formulario nunca se rellenaba.
+            #
+            # Si el adaptador marca `form_first`, esperar aquí es tiempo tirado:
+            # su deep link no dispara el XHR, así que el bucle consume los 25 s
+            # completos para nada. Medido con MSC: 31 s hasta el formulario, de
+            # los cuales ~25 eran esta espera muerta.
+            if adapter.form_first:
                 await self._fallback_form(page, adapter, container)
-                deadline = asyncio.get_running_loop().time() + min(self._settings.wait_seconds, 15)
+                deadline = asyncio.get_running_loop().time() + self._settings.wait_seconds
                 while asyncio.get_running_loop().time() < deadline:
                     if await self._best_so_far(captured, container):
                         break
                     await asyncio.sleep(0.5)
+            else:
+                deadline = asyncio.get_running_loop().time() + self._settings.wait_seconds
+                while asyncio.get_running_loop().time() < deadline:
+                    if await self._best_so_far(captured, container):
+                        break
+                    await asyncio.sleep(0.5)
+
+                if not captured_is_usable(captured):
+                    # Respaldo: rellenar el formulario cuando el deep link no
+                    # dispara el XHR. No basta `if not captured`: MSC contesta
+                    # JSON inútil (GetCountryAgencies) y el formulario nunca se
+                    # rellenaba.
+                    await self._fallback_form(page, adapter, container)
+                    deadline = asyncio.get_running_loop().time() + min(self._settings.wait_seconds, 15)
+                    while asyncio.get_running_loop().time() < deadline:
+                        if await self._best_so_far(captured, container):
+                            break
+                        await asyncio.sleep(0.5)
 
             title = await self._safe_title(page)
             if not captured and not blocked:

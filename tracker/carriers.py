@@ -36,6 +36,10 @@ class CarrierAdapter:
     status_hint_keys: tuple[str, ...] = ()
     # Ajustes de navegación propios (algunas SPAs necesitan más espera).
     post_load_wait_ms: int = 1500
+    # Si el deep link no dispara el XHR, el formulario va primero. Medido con
+    # MSC: su `?trackingNumber=` no hace la petición, así que esperar ahí gasta
+    # los 25 s de `wait_seconds` completos antes de intentar el formulario.
+    form_first: bool = False
     needs_form_interaction: bool = False
 
     def is_candidate(self, url: str, content_type: str = "") -> bool:
@@ -83,6 +87,11 @@ MSC = CarrierAdapter(
     ),
     status_hint_keys=("statusname", "eventname", "movename", "trackingstatus"),
     needs_form_interaction=True,
+    # Medido con el codigo real: el deep link `?trackingNumber=` de MSC no
+    # dispara `TrackingInfo`; la respuesta llega ~31 s despues, y solo porque
+    # el respaldo del formulario entro tras agotar los 25 s de espera. Rellenar
+    # primero baja la consulta de 33 s a ~5 s.
+    form_first=True,
 )
 
 MAERSK = CarrierAdapter(
